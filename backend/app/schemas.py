@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -47,7 +47,17 @@ class FinancialRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MarketReportRead(BaseModel):
+    summary_content: str
+    sentiment_score: float
+    collected_at: datetime
+    source_type: str
+
+    model_config = {"from_attributes": True}
+
+
 class CompanyDetail(CompanyRead):
     financials: list[FinancialRead] = []
+    latest_report: MarketReportRead | None = None
 
 
