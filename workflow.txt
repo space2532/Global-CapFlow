@@ -1,0 +1,90 @@
+```text
+# ⚙️ Global CapFlow 구현 상세 워크플로우 (Modular & DB-Centric)
+
+---
+
+## 1. Phase A: 프로젝트 구조 및 기반 설계 (Abstraction)
+
+핵심 목표: 외부 API 의존성을 격리하여, 나중에 API를 교체하더라도 비즈니스 로직이 깨지지 않게 한다.
+
+1.1. 디렉토리 구조 설계 (Service Pattern)
+   * `app/services/stock_service.py`: 주가/재무 데이터 수집 담당 (현재: yfinance -> 미래: FMP/AlphaVantage)
+   * `app/services/news_service.py`: 뉴스/텍스트 데이터 수집 담당 (현재: DuckDuckGo -> 미래: Google Search API)
+   * `app/routers/`: 클라이언트 요청 처리
+   * `app/models/`: DB 스키마 정의
+
+1.2. PostgreSQL DB 테이블 스키마 정의
+   * `companies`: Ticker(PK), Name, Industry
+   * `financials`: id(PK), Ticker(FK), Year, Revenue, NetIncome, PER, MarketCap (숫자 데이터)
+   * `market_reports` (New): id(PK), Ticker(FK), Content(Text), Collected_At, Source_Type (뉴스 데이터)
+   * `ai_analysis`: id(PK), Request_Hash, Response_Json, Created_At (캐싱용)
+
+---
+
+## 2. Phase B: 데이터 수집 파이프라인 (Fetch -> Save)
+
+모든 데이터 요청은 "DB 확인 -> (없으면) 서비스 모듈 호출 -> DB 저장 -> 반환"의 흐름을 엄격히 따른다.
+
+2.1. Stock Service 구현 (Wrapper)
+   * 함수: `async def fetch_financials(ticker: str)`
+   * 로직: 
+     1. `yfinance.Ticker(ticker).info` 호출.
+     2. 필요한 필드(매출, 이익, PER 등)만 추출하여 표준화된 딕셔너리로 변환.
+     3. (중요) 이 함수는 외부 API가 무엇인지 모르게, 순수한 데이터만 리턴해야 함.
+
+2.2. News Service 구현 (Wrapper)
+   * 함수: `async def fetch_market_context(keywords: list)`
+   * 로직:
+     1. `DuckDuckGoSearch` 라이브러리 호출.
+     2. 검색 결과 상위 3~5개의 `body`(본문 요약)를 추출.
+     3. 텍스트 리스트로 정제하여 리턴.
+
+2.3. Data Loader (FastAPI Logic)
+   * 사용자 요청 시, `financials`와 `market_reports` 테이블을 먼저 조회.
+   * 데이터가 없거나 오래되었으면(예: 24시간 경과), 위 2.1/2.2 서비스 함수를 호출하여 DB에 `INSERT/UPDATE`.
+   * 최종적으로 DB 객체를 반환.
+
+---
+
+## 3. Phase C: AI 통합 분석 엔진 (RAG Logic)
+
+Matchup(비교)과 Chatbot(질문)은 동일한 "Context Injection" 파이프라인을 공유한다.
+
+3.1. 통합 분석 엔드포인트 (`/api/analyze`)
+   * Input: `{ "type": "matchup" | "chat", "tickers": ["AAPL"], "query": "..." }`
+
+3.2. Context 구성 (RAG)
+   * DB에서 읽어온 `Financial Data` (JSON) + `Market Reports` (Text)를 하나의 프롬프트 문자열로 결합.
+   * 프롬프트 예시:
+     "아래 제공된 [Data]와 [News]만을 근거로 답변해. 외부 지식 사용 금지.
+      [Data]: {Revenue: 100B, PER: 25...}
+      [News]: 'Recent sales drop due to...'
+      [User Question]: '왜 매출이 줄었어?'"
+
+3.3. OpenAI 호출 및 캐싱
+   * GPT-4o/3.5-turbo 호출.
+   * 응답 결과를 `ai_analysis` 테이블에 저장하여, 동일 질문 재요청 시 DB 값 반환.
+
+---
+
+## 4. Phase D: 프론트엔드 (React)
+
+4.1. UI 컴포넌트
+   * `MatchupView`: 두 기업 선택 -> 로딩(데이터 수집/분석) -> 결과(점수판, 차트, AI 코멘트).
+   * `ChatInterface`: 채팅창 UI -> 사용자 질문 전송 -> AI 답변 출력 (출처 표시: "기반 데이터: 2024 Q3 보고서, XX 뉴스").
+
+4.2. 상태 관리
+   * API 호출 중 "외부 데이터를 수집하고 있습니다...", "보고서를 분석 중입니다..." 등의 단계별 로딩 메시지를 표시하여 체감 대기 시간을 줄임.
+
+---
+
+## 5. Phase E: 유지보수 및 확장 전략
+
+5.1. API 교체 시나리오 (시뮬레이션)
+   * 상황: yfinance가 막힘.
+   * 대응: `app/services/stock_service.py` 파일만 오픈.
+   * 수정: `import yfinance`를 `import requests` (FMP API)로 변경하고, 리턴 포맷만 맞춤.
+   * 결과: 나머지 백엔드 로직, DB, 프론트엔드는 수정 불필요.
+
+5.2. 테스트
+   * `services` 모듈에 대한 단위 테스트(Mocking)를 작성하여, 외부 API 장애 상황에서도 시스템이 멈추지 않는지(예: 예전 DB 데이터라도 보여주는지) 검증.

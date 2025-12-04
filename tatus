@@ -1,0 +1,39 @@
+[33mcommit 5fceb3686ef29279ed43539fddd721e8f34eced5[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Jung Danwoo <space10423@gmail.com>
+Date:   Thu Dec 4 15:04:19 2025 +0900
+
+    first commit
+
+.env
+backend/app/__init__.py
+backend/app/__pycache__/__init__.cpython-313.pyc
+backend/app/__pycache__/config.cpython-313.pyc
+backend/app/__pycache__/create_db.cpython-313.pyc
+backend/app/__pycache__/database.cpython-313.pyc
+backend/app/__pycache__/main.cpython-313.pyc
+backend/app/__pycache__/models.cpython-313.pyc
+backend/app/__pycache__/schemas.cpython-313.pyc
+backend/app/__pycache__/seeds.cpython-313.pyc
+backend/app/config.py
+backend/app/create_db.py
+backend/app/database.py
+backend/app/main.py
+backend/app/models.py
+backend/app/routers/__init__.py
+backend/app/routers/__pycache__/__init__.cpython-313.pyc
+backend/app/routers/__pycache__/company.cpython-313.pyc
+backend/app/routers/company.py
+backend/app/schemas.py
+backend/app/seeds.py
+backend/app/services/__init__.py
+backend/app/services/__pycache__/__init__.cpython-313.pyc
+backend/app/services/__pycache__/ai_service.cpython-313.pyc
+backend/app/services/__pycache__/news_service.cpython-313.pyc
+backend/app/services/__pycache__/stock_service.cpython-313.pyc
+backend/app/services/ai_service.py
+backend/app/services/news_service.py
+backend/app/services/stock_service.py
+backend/migrations/add_new_fields.sql
+backend/requirements.txt
+readme.md
+workflow.txt
