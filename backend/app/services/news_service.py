@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import List, Dict, Any
 from duckduckgo_search import DDGS
 
@@ -25,53 +26,65 @@ async def fetch_company_news(ticker: str, limit: int = 5) -> List[Dict[str, Any]
     
     def _fetch_sync(ticker: str, limit: int) -> List[Dict[str, Any]]:
         """동기 함수: DDGS를 사용하여 뉴스를 가져옵니다."""
-        try:
-            with DDGS() as ddgs:
-                # 검색 키워드: "{ticker} stock news" 또는 "{ticker} financial analysis"
-                # 우선순위: stock news를 먼저 시도하고, 결과가 부족하면 financial analysis도 시도
-                search_queries = [
-                    f"{ticker} stock news",
-                    f"{ticker} financial analysis"
-                ]
-                
-                all_results = []
-                
-                for query in search_queries:
-                    if len(all_results) >= limit:
-                        break
+        # 재시도 로직: 최대 3번 시도
+        for attempt in range(3):
+            try:
+                with DDGS() as ddgs:
+                    # 검색 키워드: "{ticker} stock news" 또는 "{ticker} financial analysis"
+                    # 우선순위: stock news를 먼저 시도하고, 결과가 부족하면 financial analysis도 시도
+                    search_queries = [
+                        f"{ticker} stock news",
+                        f"{ticker} financial analysis"
+                    ]
                     
-                    try:
-                        # news() 메서드를 사용하여 뉴스 검색
-                        results = list(ddgs.news(query, max_results=limit))
+                    all_results = []
+                    
+                    for query in search_queries:
+                        if len(all_results) >= limit:
+                            break
                         
-                        for result in results:
-                            # 중복 제거 (URL 기준)
-                            if not any(item.get("url") == result.get("url", "") for item in all_results):
-                                all_results.append(result)
-                    except Exception:
-                        # 개별 쿼리 실패 시 다음 쿼리 시도
-                        continue
-                
-                # 결과를 표준 형식으로 변환
-                news_list = []
-                for result in all_results[:limit]:
-                    news_item = {
-                        "title": result.get("title", ""),
-                        "body": result.get("body", "") or result.get("snippet", ""),
-                        "url": result.get("url", "") or result.get("href", ""),
-                        "source": result.get("source", "") or result.get("source_name", ""),
-                        "date": result.get("date", "") or result.get("published", "")
-                    }
-                    news_list.append(news_item)
-                
-                return news_list
-                
-        except Exception:
-            # 전체 검색 실패 시 빈 리스트 반환
-            return []
+                        try:
+                            # news() 메서드를 사용하여 뉴스 검색
+                            results = list(ddgs.news(query, max_results=limit))
+                            
+                            for result in results:
+                                # 중복 제거 (URL 기준)
+                                if not any(item.get("url") == result.get("url", "") for item in all_results):
+                                    all_results.append(result)
+                        except Exception:
+                            # 개별 쿼리 실패 시 다음 쿼리 시도
+                            continue
+                    
+                    # 결과를 표준 형식으로 변환
+                    news_list = []
+                    for result in all_results[:limit]:
+                        news_item = {
+                            "title": result.get("title", ""),
+                            "body": result.get("body", "") or result.get("snippet", ""),
+                            "url": result.get("url", "") or result.get("href", ""),
+                            "source": result.get("source", "") or result.get("source_name", ""),
+                            "date": result.get("date", "") or result.get("published", "")
+                        }
+                        news_list.append(news_item)
+                    
+                    # 성공 시 결과 반환
+                    return news_list
+                    
+            except Exception:
+                # 실패 시 재시도 (마지막 시도가 아니면)
+                if attempt < 2:  # 0, 1번째 시도 (총 3번 중)
+                    time.sleep(2)  # 2초 대기 후 재시도
+                    continue
+                else:
+                    # 3번 모두 실패하면 빈 리스트 반환
+                    return []
+        
+        # 루프를 빠져나온 경우 (이론적으로 도달하지 않아야 함)
+        return []
     
     # asyncio.to_thread를 사용하여 동기 함수를 비동기로 실행
     return await asyncio.to_thread(_fetch_sync, ticker, limit)
+
 
 
 

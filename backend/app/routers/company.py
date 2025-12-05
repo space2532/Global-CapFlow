@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
+from typing import List, Optional
 import datetime
 
 from .. import models, schemas
@@ -216,3 +216,65 @@ async def get_company_detail(ticker: str, db: AsyncSession = Depends(get_db)):
     )
     
     return company_detail
+
+
+@router.get("/companies/{ticker}/prices", response_model=List[schemas.PriceHistoryRead], summary="특정 기업의 주가 및 시가총액 히스토리")
+async def get_company_prices(
+    ticker: str,
+    limit: Optional[int] = Query(default=None, ge=1, description="반환할 최근 데이터 수 (선택, 전체 조회 시 생략)"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    특정 기업의 주가 및 시가총액 히스토리를 반환합니다 (Line Chart 용).
+    
+    - ticker: 기업 티커
+    - limit: 반환할 최근 데이터 수 (선택, 생략 시 전체 조회)
+    - 날짜 오름차순 정렬
+    """
+    ticker = ticker.upper()
+    
+    # Company 존재 확인
+    stmt = select(models.Company).where(models.Company.ticker == ticker)
+    result = await db.execute(stmt)
+    company = result.scalar_one_or_none()
+    
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    # Price 히스토리 조회 (날짜 오름차순)
+    stmt = (
+        select(models.Price)
+        .where(models.Price.ticker == ticker)
+        .order_by(models.Price.date)
+    )
+    
+    # limit이 지정된 경우 최근 N개만 조회 (날짜 내림차순으로 limit 후 다시 오름차순 정렬)
+    if limit is not None:
+        # 서브쿼리로 최근 N개 날짜를 먼저 찾고, 그 데이터를 오름차순으로 정렬
+        stmt = stmt.order_by(models.Price.date.desc()).limit(limit)
+        result = await db.execute(stmt)
+        prices = result.scalars().all()
+        # 날짜 오름차순으로 다시 정렬
+        prices = sorted(prices, key=lambda p: p.date)
+    else:
+        result = await db.execute(stmt)
+        prices = result.scalars().all()
+    
+    if not prices:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No price history found for ticker {ticker}"
+        )
+    
+    # PriceHistoryRead 스키마로 변환
+    price_history = [
+        schemas.PriceHistoryRead(
+            date=price.date,
+            close=price.close,
+            market_cap=price.market_cap,
+            volume=price.volume
+        )
+        for price in prices
+    ]
+    
+    return price_history

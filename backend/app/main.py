@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 
 from . import models
 from .database import engine
-from .routers import company
+from .routers import company, collection, analyze, rankings
+from .services.scheduler_service import start_scheduler, shutdown_scheduler
 
 # Lifespan 방식으로 시작 시 DB 테이블 생성 (선택 사항, create_db.py가 있으므로 생략 가능하나 안전장치로 둠)
 @asynccontextmanager
@@ -12,8 +13,15 @@ async def lifespan(app: FastAPI):
     # 시작 시 실행될 로직
     # async with engine.begin() as conn:
     #     await conn.run_sync(models.SQLModel.metadata.create_all)
+    
+    # 스케줄러 시작
+    start_scheduler()
+    
     yield
+    
     # 종료 시 실행될 로직
+    # 스케줄러 종료
+    shutdown_scheduler()
 
 app = FastAPI(
     title="Global CapFlow API",
@@ -37,3 +45,6 @@ async def health() -> dict[str, str]:
 
 # Router 등록
 app.include_router(company.router)
+app.include_router(collection.router)
+app.include_router(analyze.router)
+app.include_router(rankings.router)

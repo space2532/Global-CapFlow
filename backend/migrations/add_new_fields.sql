@@ -80,3 +80,103 @@ END $$;
 -- 완료 메시지
 SELECT 'Migration completed successfully!' AS status;
 
+-- 6. financials 테이블에 quarter 컬럼 추가
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'financials' AND column_name = 'quarter'
+    ) THEN
+        ALTER TABLE financials
+        ADD COLUMN quarter INTEGER;
+    END IF;
+END $$;
+
+-- 7. 기존 유니크 제약 (ticker, year) 제거
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'financials'
+          AND constraint_name = 'uq_financials_ticker_year'
+    ) THEN
+        ALTER TABLE financials
+        DROP CONSTRAINT uq_financials_ticker_year;
+    END IF;
+END $$;
+
+-- 8. 새 유니크 제약 (ticker, year, quarter) 추가
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'financials'
+          AND constraint_name = 'uq_financials_ticker_year_quarter'
+    ) THEN
+        ALTER TABLE financials
+        ADD CONSTRAINT uq_financials_ticker_year_quarter
+        UNIQUE (ticker, year, quarter);
+    END IF;
+END $$;
+
+-- 9. financials.quarter 값 범위 제한 (0 또는 1~4 허용)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'financials'
+          AND constraint_name = 'chk_financials_quarter_range'
+    ) THEN
+        ALTER TABLE financials
+        ADD CONSTRAINT chk_financials_quarter_range
+        CHECK (quarter IS NULL OR quarter BETWEEN 0 AND 4);
+    END IF;
+END $$;
+
+-- 10. prices 테이블 생성 (월별 주가)
+CREATE TABLE IF NOT EXISTS prices (
+    id          bigserial PRIMARY KEY,
+    ticker      text NOT NULL REFERENCES companies (ticker) ON DELETE CASCADE,
+    "date"      timestamptz NOT NULL,
+    close       double precision,
+    market_cap  double precision,
+    volume      bigint,
+    CONSTRAINT uq_prices_ticker_date UNIQUE (ticker, "date")
+);
+
+CREATE INDEX IF NOT EXISTS idx_prices_ticker_date
+    ON prices (ticker, "date");
+
+CREATE INDEX IF NOT EXISTS idx_prices_date
+    ON prices ("date");
+
+-- 11. rankings 테이블 생성 (연도별 시가총액 순위)
+CREATE TABLE IF NOT EXISTS rankings (
+    id           bigserial PRIMARY KEY,
+    year         integer NOT NULL,
+    rank         integer NOT NULL,
+    ticker       text NOT NULL REFERENCES companies (ticker) ON DELETE CASCADE,
+    market_cap   double precision,
+    company_name text NOT NULL,
+    CONSTRAINT uq_rankings_year_rank UNIQUE (year, rank)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rankings_year
+    ON rankings (year);
+
+CREATE INDEX IF NOT EXISTS idx_rankings_ticker_year
+    ON rankings (ticker, year);
+
+-- 12. companies.category 값 제한 CHECK 제약 (선택적으로 수정 가능)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'companies'
+          AND constraint_name = 'chk_companies_category'
+    ) THEN
+        ALTER TABLE companies
+        ADD CONSTRAINT chk_companies_category
+        CHECK (category IN ('Stock', 'Meme', 'Product'));
+    END IF;
+END $$;
