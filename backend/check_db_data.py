@@ -187,6 +187,98 @@ async def check_ai_analysis():
                 print(f"  - {analysis.request_hash[:16]}...: 승자={winner}, 생성={analysis.created_at}")
 
 
+async def check_company_countries():
+    """Company 테이블의 국가 데이터 확인"""
+    print("\n" + "="*60)
+    print("🌍 Company 테이블 (국가 데이터)")
+    print("="*60)
+    
+    async with async_session_factory() as db:
+        # 국가별 기업 수 집계
+        stmt = select(
+            models.Company.country,
+            func.count(models.Company.ticker).label("count")
+        ).group_by(models.Company.country).order_by(
+            func.count(models.Company.ticker).desc()
+        )
+        result = await db.execute(stmt)
+        country_stats = result.all()
+        
+        total_with_country = sum(count for country, count in country_stats if country)
+        total_without_country = sum(count for country, count in country_stats if not country)
+        
+        print(f"\n📊 국가 정보 통계:")
+        print(f"  국가 정보 있음: {total_with_country}개")
+        print(f"  국가 정보 없음: {total_without_country}개")
+        
+        print(f"\n📋 국가별 기업 수 (상위 10개):")
+        for country, count in country_stats[:10]:
+            country_name = country if country else "(국가 정보 없음)"
+            print(f"  {country_name}: {count}개")
+        
+        # 샘플 기업 확인
+        print(f"\n📋 국가 정보가 있는 샘플 기업 (5개):")
+        stmt = select(models.Company).where(
+            models.Company.country.is_not(None)
+        ).limit(5)
+        result = await db.execute(stmt)
+        companies = result.scalars().all()
+        
+        for company in companies:
+            print(f"  - {company.ticker}: {company.name} ({company.country})")
+
+
+async def check_quarterly_reports():
+    """QuarterlyReport 테이블 데이터 확인"""
+    print("\n" + "="*60)
+    print("📊 QuarterlyReport 테이블 (분기별 리포트)")
+    print("="*60)
+    
+    async with async_session_factory() as db:
+        stmt = select(func.count(models.QuarterlyReport.id))
+        result = await db.execute(stmt)
+        total_count = result.scalar()
+        print(f"\n📊 전체 리포트 수: {total_count}")
+        
+        if total_count == 0:
+            print("\n  ⚠️  리포트가 없습니다.")
+            print("     분기별 리포트 생성 기능을 실행해보세요.")
+            return
+        
+        # 분기별 리포트 수
+        stmt = select(
+            models.QuarterlyReport.year,
+            models.QuarterlyReport.quarter,
+            func.count(models.QuarterlyReport.id).label("count")
+        ).group_by(
+            models.QuarterlyReport.year,
+            models.QuarterlyReport.quarter
+        ).order_by(
+            desc(models.QuarterlyReport.year),
+            desc(models.QuarterlyReport.quarter)
+        )
+        result = await db.execute(stmt)
+        quarterly_stats = result.all()
+        
+        print(f"\n📋 분기별 리포트 수:")
+        for year, quarter, count in quarterly_stats:
+            print(f"  {year}년 {quarter}분기: {count}개")
+        
+        # 최근 리포트 샘플
+        print(f"\n📋 최근 리포트 샘플 (5개):")
+        stmt = select(models.QuarterlyReport).order_by(
+            desc(models.QuarterlyReport.created_at)
+        ).limit(5)
+        result = await db.execute(stmt)
+        reports = result.scalars().all()
+        
+        for report in reports:
+            content_preview = report.content[:80] if report.content else "N/A"
+            print(f"\n  - {report.ticker} ({report.year}Q{report.quarter})")
+            print(f"    생성: {report.created_at}")
+            print(f"    내용: {content_preview}...")
+
+
 async def main():
     """메인 함수"""
     print("\n" + "="*60)
@@ -200,6 +292,8 @@ async def main():
         await check_financials()
         await check_prices()
         await check_ai_analysis()
+        await check_company_countries()
+        await check_quarterly_reports()
         
         print("\n\n" + "="*60)
         print("✅ 데이터 확인 완료!")
@@ -209,11 +303,12 @@ async def main():
         print("   2. Table Editor 메뉴 선택")
         print("   3. 다음 테이블 확인:")
         print("      - market_reports: 뉴스 요약 데이터")
-        print("      - companies: 기업 정보")
+        print("      - companies: 기업 정보 (국가 데이터 포함)")
         print("      - rankings: 시가총액 순위")
         print("      - financials: 재무 데이터")
         print("      - prices: 주가 데이터")
         print("      - ai_analysis: AI 분석 캐시")
+        print("      - quarterly_reports: 분기별 리포트")
         
     except Exception as e:
         print(f"\n❌ 오류 발생: {e}")

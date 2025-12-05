@@ -1,7 +1,6 @@
 import asyncio
 from typing import Dict, List, Any
 from datetime import datetime
-import requests
 import yfinance as yf
 
 
@@ -38,17 +37,7 @@ async def fetch_company_data(ticker: str) -> Dict[str, Any]:
     
     def _fetch_sync(ticker: str) -> Dict[str, Any]:
         """동기 함수: yfinance로 데이터를 가져옵니다."""
-        # requests.Session을 사용하여 User-Agent 설정 (봇 감지 방지)
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        })
-        
-        ticker_obj = yf.Ticker(ticker, session=session)
+        ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
         
         # Company 정보 추출
@@ -57,6 +46,7 @@ async def fetch_company_data(ticker: str) -> Dict[str, Any]:
             "name": info.get("longName") or info.get("shortName", ""),
             "sector": info.get("sector", ""),
             "industry": info.get("industry", ""),
+            "country": info.get("country", ""),
             "currency": info.get("currency", ""),
         }
         

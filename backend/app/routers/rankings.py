@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from typing import List
 
 from .. import models, schemas
@@ -20,47 +21,39 @@ async def get_rankings_by_year(
     
     - year: 조회할 연도
     - limit: 반환할 상위 기업 수 (기본값: 100, 최대: 1000)
-    - models.Ranking과 models.Company 테이블을 조인하여 sector, industry 정보도 함께 반환
+    - Relationship을 활용하여 Company 정보를 자동으로 로드합니다.
     """
-    # Rankings와 Companies 테이블 조인 (N+1 문제 방지)
+    # Relationship을 활용하여 Company 정보를 함께 로드 (N+1 문제 방지)
     stmt = (
-        select(
-            models.Ranking,
-            models.Company
-        )
-        .join(
-            models.Company,
-            models.Ranking.ticker == models.Company.ticker,
-            isouter=True  # LEFT JOIN: Ranking에 Company가 없어도 포함
-        )
+        select(models.Ranking)
+        .options(selectinload(models.Ranking.company))
         .where(models.Ranking.year == year)
         .order_by(models.Ranking.rank)
         .limit(limit)
     )
     
     result = await db.execute(stmt)
-    rows = result.all()
+    rankings = result.scalars().all()
     
-    if not rows:
+    if not rankings:
         raise HTTPException(
             status_code=404,
             detail=f"No rankings found for year {year}"
         )
     
-    # 결과를 RankingRead 스키마로 변환
-    rankings = []
-    for ranking, company in rows:
-        rankings.append(schemas.RankingRead(
+    # 결과를 RankingRead 스키마로 변환 (Relationship 활용)
+    return [
+        schemas.RankingRead(
             year=ranking.year,
             rank=ranking.rank,
             ticker=ranking.ticker,
-            name=company.name if company else ranking.company_name,
+            name=ranking.company.name if ranking.company else ranking.company_name,
             market_cap=ranking.market_cap,
-            sector=company.sector if company else None,
-            industry=company.industry if company else None,
-        ))
-    
-    return rankings
+            sector=ranking.company.sector if ranking.company else None,
+            industry=ranking.company.industry if ranking.company else None,
+        )
+        for ranking in rankings
+    ]
 
 
 @router.get("/history", response_model=List[schemas.RankHistoryRead], summary="상위 기업들의 연도별 순위 변동 데이터")
@@ -103,35 +96,28 @@ async def get_rankings_history(
     if not top_tickers:
         return []
     
-    # 3. 해당 티커들의 모든 연도 Ranking 데이터 조회 (Company와 조인하여 name 가져오기)
+    # 3. 해당 티커들의 모든 연도 Ranking 데이터 조회 (Relationship 활용)
     stmt_all_rankings = (
-        select(
-            models.Ranking,
-            models.Company
-        )
-        .join(
-            models.Company,
-            models.Ranking.ticker == models.Company.ticker,
-            isouter=True  # LEFT JOIN
-        )
+        select(models.Ranking)
+        .options(selectinload(models.Ranking.company))
         .where(models.Ranking.ticker.in_(top_tickers))
         .order_by(models.Ranking.ticker, models.Ranking.year)
     )
     
     result = await db.execute(stmt_all_rankings)
-    rows = result.all()
+    rankings = result.scalars().all()
     
-    # 4. 티커별로 그룹화하여 RankHistoryRead 형태로 변환
+    # 4. 티커별로 그룹화하여 RankHistoryRead 형태로 변환 (Relationship 활용)
     ticker_data = {}
     
-    for ranking, company in rows:
+    for ranking in rankings:
         ticker = ranking.ticker
         
         # 티커별 데이터 초기화 (한 번만)
         if ticker not in ticker_data:
             ticker_data[ticker] = {
                 "ticker": ticker,
-                "name": company.name if company else ranking.company_name,
+                "name": ranking.company.name if ranking.company else ranking.company_name,
                 "history": []
             }
         

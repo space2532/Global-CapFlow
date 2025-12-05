@@ -1,12 +1,15 @@
-from __future__ import annotations
-
+# from __future__ import annotations 제거: SQLModel Relationship이 타입 힌트를 올바르게 파싱하도록 함
 from datetime import date as dt_date, datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sqlalchemy import Column, Text, UniqueConstraint, Date, DateTime
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy import JSON
 from sqlmodel import Field, Relationship, SQLModel
+
+if TYPE_CHECKING:
+    # 순환 참조 방지를 위한 타입 체크 전용 import
+    pass
 
 
 class Company(SQLModel, table=True):
@@ -22,10 +25,11 @@ class Company(SQLModel, table=True):
     country: Optional[str] = Field(default=None, max_length=128)
     currency: Optional[str] = Field(default=None, max_length=32)
 
-    # 관계는 SQLAlchemy 2.0+ 호환성 문제로 인해 일시적으로 주석 처리
-    # 필요시 나중에 추가 가능
-    # financials: List["Financial"] = Relationship(back_populates="company")
-    # market_reports: List["MarketReport"] = Relationship(back_populates="company")
+    # Relationship 복구: from __future__ import annotations 제거로 타입 힌트가 즉시 평가되어 SQLModel이 관계를 올바르게 파싱
+    financials: List["Financial"] = Relationship(back_populates="company", sa_relationship_kwargs={"lazy": "selectin"})
+    market_reports: List["MarketReport"] = Relationship(back_populates="company", sa_relationship_kwargs={"lazy": "selectin"})
+    prices: List["Price"] = Relationship(back_populates="company", sa_relationship_kwargs={"lazy": "selectin"})
+    rankings: List["Ranking"] = Relationship(back_populates="company", sa_relationship_kwargs={"lazy": "selectin"})
 
 
 class Financial(SQLModel, table=True):
@@ -51,7 +55,7 @@ class Financial(SQLModel, table=True):
     per: Optional[float] = None
     market_cap: Optional[float] = None
 
-    # company: Optional[Company] = Relationship(back_populates="financials")
+    company: Optional["Company"] = Relationship(back_populates="financials", sa_relationship_kwargs={"lazy": "selectin"})
 
 
 class Price(SQLModel, table=True):
@@ -67,10 +71,15 @@ class Price(SQLModel, table=True):
         foreign_key="companies.ticker",
         index=True,
     )
-    date: datetime = Field(index=True, description="해당 월의 기준일 (예: 월말)")
+    date: datetime = Field(
+        description="해당 월의 기준일 (예: 월말)",
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
+    )
     close: Optional[float] = Field(default=None, description="종가")
     market_cap: Optional[float] = Field(default=None, description="시가총액")
     volume: Optional[int] = Field(default=None, description="거래량")
+
+    company: Optional["Company"] = Relationship(back_populates="prices", sa_relationship_kwargs={"lazy": "selectin"})
 
 
 class Ranking(SQLModel, table=True):
@@ -97,6 +106,8 @@ class Ranking(SQLModel, table=True):
     )
     market_cap: Optional[float] = Field(default=None, description="해당 연도 기준 시가총액")
     company_name: str = Field(max_length=255, description="당시 사명 (이력 보존용)")
+
+    company: Optional["Company"] = Relationship(back_populates="rankings", sa_relationship_kwargs={"lazy": "selectin"})
 
 
 class SectorTrend(SQLModel, table=True):
@@ -164,7 +175,7 @@ class MarketReport(SQLModel, table=True):
         description='보고서 기간 식별용 (예: "2024-Q1").',
     )
 
-    # company: Optional[Company] = Relationship(back_populates="market_reports")
+    company: Optional["Company"] = Relationship(back_populates="market_reports", sa_relationship_kwargs={"lazy": "selectin"})
 
 
 class QuarterlyReport(SQLModel, table=True):
@@ -207,4 +218,7 @@ class AIAnalysis(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False)
     )
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
+    )

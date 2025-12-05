@@ -2,6 +2,16 @@ import asyncio
 import time
 from typing import List, Dict, Any
 from duckduckgo_search import DDGS
+import requests_cache
+
+# DuckDuckGo 뉴스 검색용 전역 캐시 설정
+# Rate Limit 방지를 위해 30분 TTL 설정 (뉴스는 자주 업데이트되므로 짧은 캐시)
+requests_cache.install_cache(
+    cache_name='duckduckgo_news_cache',
+    backend='sqlite',
+    expire_after=1800,  # 30분
+    cache_control=True,
+)
 
 
 async def fetch_company_news(ticker: str, limit: int = 5) -> List[Dict[str, Any]]:

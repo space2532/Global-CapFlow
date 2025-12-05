@@ -137,7 +137,7 @@ class AIService:
             for attempt in range(max_retries):
                 try:
                     response = await client.chat.completions.create(
-                        model="gpt-4o",
+                        model="gpt-4o-mini",  # 비용 절감을 위해 mini 모델 사용
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
@@ -425,6 +425,148 @@ class AIService:
             except json.JSONDecodeError as e:
                 print(f"❌ [AIService] Error: {e} (JSONDecodeError)")
                 return default_result
+
+        except ValueError as e:
+            print(f"❌ [AIService] Error: {e}")
+            return default_result
+
+        except Exception as e:
+            import traceback
+            print(f"❌ [AIService] Error: {e}")
+            traceback.print_exc()
+            return default_result
+
+    async def generate_quarterly_report(
+        self,
+        ticker: str,
+        year: int,
+        quarter: int,
+        financials: Dict[str, Any],
+        news_list: List[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        분기별 기업 분석 리포트를 생성하는 비동기 메서드.
+        
+        Args:
+            ticker: 주식 티커 심볼 (예: "AAPL")
+            year: 연도 (예: 2024)
+            quarter: 분기 (1~4)
+            financials: 재무 데이터 딕셔너리
+            news_list: 뉴스 리스트 (선택사항)
+        
+        Returns:
+            분기별 분석 리포트 텍스트 (한국어)
+        """
+        default_result = f"{year}년 {quarter}분기 {ticker} 분석 리포트를 생성할 수 없습니다."
+
+        print(f"🚀 [AIService] Generating quarterly report for {ticker} ({year}Q{quarter})...")
+
+        try:
+            if self.client is None:
+                print("❌ [AIService] Client is None!")
+                raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
+
+            client = self.client
+
+            # 재무 데이터 텍스트 구성
+            financials_text = ""
+            if financials:
+                financials_text = f"""
+[재무 데이터]
+- 연도: {financials.get('year', 'N/A')}
+- 매출(Revenue): {financials.get('revenue', 'N/A'):,.0f}""" if financials.get('revenue') else "- 매출: N/A"
+                financials_text += f"""
+- 순이익(Net Income): {financials.get('net_income', 'N/A'):,.0f}""" if financials.get('net_income') else "\n- 순이익: N/A"
+                financials_text += f"""
+- PER: {financials.get('per', 'N/A'):.2f}""" if financials.get('per') else "\n- PER: N/A"
+                financials_text += f"""
+- 시가총액(Market Cap): {financials.get('market_cap', 'N/A'):,.0f}""" if financials.get('market_cap') else "\n- 시가총액: N/A"
+            else:
+                financials_text = "\n[재무 데이터: 없음]"
+
+            # 뉴스 데이터 텍스트 구성
+            news_text = ""
+            if news_list:
+                news_text = f"\n[뉴스 ({len(news_list)}개)]\n"
+                for idx, news in enumerate(news_list[:5], 1):  # 최대 5개
+                    title = news.get("title", "")
+                    body = news.get("body", "") or news.get("snippet", "")
+                    date = news.get("date", "")
+                    news_text += f"\n뉴스 {idx}:\n"
+                    news_text += f"  제목: {title}\n"
+                    if body:
+                        news_text += f"  내용: {body[:200]}...\n"
+                    if date:
+                        news_text += f"  날짜: {date}\n"
+            else:
+                news_text = "\n[뉴스: 없음]"
+
+            # System 프롬프트
+            system_prompt = """너는 전문 투자 분석가다. 주어진 기업의 분기별 재무 데이터와 뉴스를 종합 분석하여 상세한 분기 리포트를 작성해라.
+
+리포트는 다음 구조를 따라야 한다:
+1. 분기 개요 (2-3문장)
+2. 재무 성과 분석 (매출, 순이익, PER 등 주요 지표 분석)
+3. 주요 이슈 및 뉴스 분석
+4. 전망 및 투자 의견 (2-3문장)
+
+모든 내용은 한국어로 작성하고, 전문적이면서도 이해하기 쉽게 작성해라.
+리포트는 500-800자 정도의 분량으로 작성해라."""
+
+            # User 프롬프트
+            user_prompt = f"""다음은 {ticker}의 {year}년 {quarter}분기 데이터이다.
+
+{financials_text}
+
+{news_text}
+
+위 정보를 바탕으로 {year}년 {quarter}분기 종합 분석 리포트를 작성해라."""
+
+            # OpenAI API 호출 (Rate Limit 재시도 로직 포함)
+            print("⏳ [AIService] Calling OpenAI API for quarterly report...")
+            
+            max_retries = 3
+            wait_times = [2, 5, 10]
+            
+            response = None
+            last_exception = None
+            
+            for attempt in range(max_retries):
+                try:
+                    response = await client.chat.completions.create(
+                        model="gpt-4o",  # 분기 리포트는 중요하므로 gpt-4o 사용
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.3,
+                    )
+                    print("✅ [AIService] OpenAI Response received for quarterly report.")
+                    break
+                    
+                except RateLimitError as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_seconds = wait_times[attempt]
+                        print(f"⚠️ [AIService] Rate limit hit. Retrying in {wait_seconds}s... (Attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(wait_seconds)
+                    else:
+                        print(f"❌ [AIService] Rate limit error after {max_retries} attempts.")
+                        raise
+                except Exception as e:
+                    last_exception = e
+                    raise
+            
+            if response is None:
+                raise last_exception if last_exception else Exception("Failed to get response from OpenAI API")
+
+            # 응답 파싱
+            content = response.choices[0].message.content
+            if not content:
+                logger.warning(f"[Quarterly Report] OpenAI 응답이 비어있습니다.")
+                return default_result
+
+            return str(content)
 
         except ValueError as e:
             print(f"❌ [AIService] Error: {e}")

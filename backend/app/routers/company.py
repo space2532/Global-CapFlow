@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 import datetime
 
@@ -71,6 +72,7 @@ async def fetch_company_data(
         existing_company.name = company_info["name"]
         existing_company.sector = company_info["sector"]
         existing_company.industry = company_info["industry"]
+        existing_company.country = company_info.get("country") or existing_company.country
         existing_company.currency = company_info["currency"]
     else:
         # 신규 생성
@@ -142,26 +144,30 @@ async def fetch_company_data(
     await db.commit()
     
     # 저장 완료 후 CompanyDetail 객체 구성하여 반환
-    # Company 조회
-    stmt = select(models.Company).where(models.Company.ticker == ticker)
+    # Relationship을 활용하여 Company와 관련 데이터를 한 번에 로드
+    stmt = (
+        select(models.Company)
+        .options(
+            selectinload(models.Company.financials),
+            selectinload(models.Company.market_reports)
+        )
+        .where(models.Company.ticker == ticker)
+    )
     result = await db.execute(stmt)
     company = result.scalar_one_or_none()
     
     if not company:
         raise HTTPException(status_code=500, detail="Company not found after save")
     
-    # Financials 조회
-    stmt = select(models.Financial).where(models.Financial.ticker == ticker).order_by(models.Financial.year)
-    result = await db.execute(stmt)
-    financials = result.scalars().all()
+    # Relationship을 통해 로드된 데이터 활용
+    financials = sorted(company.financials, key=lambda f: f.year)
     
-    # 최신 MarketReport 조회
-    stmt = select(models.MarketReport).where(
-        models.MarketReport.ticker == ticker,
-        models.MarketReport.source_type == "daily_update"
-    ).order_by(models.MarketReport.collected_at.desc()).limit(1)
-    result = await db.execute(stmt)
-    latest_report = result.scalar_one_or_none()
+    # 최신 MarketReport 찾기 (source_type="daily_update")
+    latest_report = None
+    for report in sorted(company.market_reports, key=lambda r: r.collected_at, reverse=True):
+        if report.source_type == "daily_update":
+            latest_report = report
+            break
     
     # CompanyDetail 객체 구성
     company_detail = schemas.CompanyDetail(
@@ -182,26 +188,30 @@ async def get_company_detail(ticker: str, db: AsyncSession = Depends(get_db)):
     """DB에 저장된 기업 정보, 재무 데이터, 최신 AI 리포트를 조회합니다."""
     ticker = ticker.upper()
     
-    # Company 조회
-    stmt = select(models.Company).where(models.Company.ticker == ticker)
+    # Relationship을 활용하여 Company와 관련 데이터를 한 번에 로드
+    stmt = (
+        select(models.Company)
+        .options(
+            selectinload(models.Company.financials),
+            selectinload(models.Company.market_reports)
+        )
+        .where(models.Company.ticker == ticker)
+    )
     result = await db.execute(stmt)
     company = result.scalar_one_or_none()
     
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     
-    # Financials 조회
-    stmt = select(models.Financial).where(models.Financial.ticker == ticker).order_by(models.Financial.year)
-    result = await db.execute(stmt)
-    financials = result.scalars().all()
+    # Relationship을 통해 로드된 데이터 활용
+    financials = sorted(company.financials, key=lambda f: f.year)
     
-    # 최신 MarketReport 조회 (source_type="daily_update")
-    stmt = select(models.MarketReport).where(
-        models.MarketReport.ticker == ticker,
-        models.MarketReport.source_type == "daily_update"
-    ).order_by(models.MarketReport.collected_at.desc()).limit(1)
-    result = await db.execute(stmt)
-    latest_report = result.scalar_one_or_none()
+    # 최신 MarketReport 찾기 (source_type="daily_update")
+    latest_report = None
+    for report in sorted(company.market_reports, key=lambda r: r.collected_at, reverse=True):
+        if report.source_type == "daily_update":
+            latest_report = report
+            break
     
     # CompanyDetail 객체 구성
     company_detail = schemas.CompanyDetail(

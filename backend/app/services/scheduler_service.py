@@ -10,6 +10,7 @@ from .collection_service import (
     collect_news_for_top_100,
     collect_daily_prices,
     collect_quarterly_financials,
+    collect_quarterly_reports,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,27 @@ async def scheduled_quarterly_financial_collection() -> None:
     except Exception as e:
         logger.error(
             f"Error occurred during scheduled quarterly financial collection: {type(e).__name__}: {e}",
+            exc_info=True
+        )
+
+
+async def scheduled_quarterly_report_generation() -> None:
+    """
+    분기별로 실행되는 리포트 생성 작업 함수. (분기별)
+    재무 데이터 수집 후 실행되어야 함.
+    """
+    logger.info("Starting scheduled quarterly report generation task...")
+    
+    try:
+        async with async_session_factory() as db:
+            count = await collect_quarterly_reports(db)
+            logger.info(
+                f"Quarterly report generation completed successfully. "
+                f"Generated reports for {count} companies."
+            )
+    except Exception as e:
+        logger.error(
+            f"Error occurred during scheduled quarterly report generation: {type(e).__name__}: {e}",
             exc_info=True
         )
 
@@ -157,6 +179,15 @@ def start_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
     
+    # 5. 분기별: 리포트 생성 (각 분기 말일 19:00 KST: 재무 데이터 수집 후 실행)
+    scheduler.add_job(
+        scheduled_quarterly_report_generation,
+        trigger=CronTrigger(month="3,6,9,12", day="last", hour=19, minute=0, timezone=kst_timezone),
+        id="quarterly_report_generation",
+        name="Quarterly Report Generation",
+        replace_existing=True,
+    )
+    
     # 스케줄러 시작
     scheduler.start()
     logger.info(
@@ -164,7 +195,8 @@ def start_scheduler() -> AsyncIOScheduler:
         "  - Daily news collection: 06:00 KST\n"
         "  - Daily price collection: 06:30 KST\n"
         "  - Monthly top 100 collection: 1st day of month, 00:00 KST\n"
-        "  - Quarterly financial collection: Last day of quarter (Mar/Jun/Sep/Dec), 18:00 KST"
+        "  - Quarterly financial collection: Last day of quarter (Mar/Jun/Sep/Dec), 18:00 KST\n"
+        "  - Quarterly report generation: Last day of quarter (Mar/Jun/Sep/Dec), 19:00 KST"
     )
     
     return scheduler
