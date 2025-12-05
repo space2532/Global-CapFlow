@@ -52,14 +52,13 @@ WIKI_INDEX_SOURCES: List[Dict[str, Any]] = [
     },
 ]
 
-
 def _extract_tickers_from_tables(
     tables: List[pd.DataFrame],
     ticker_suffix: str = "",
 ) -> List[str]:
     """HTML 테이블 목록에서 티커(symbol) 컬럼을 찾아 리스트로 추출."""
 
-    # 블랙리스트: 잘못된 티커로 수집되는 키워드들 (Wikipedia 메뉴, 지역명, 일반 명사 등)
+    # 블랙리스트 키워드: 일반 단어나 회사 유형 키워드가 티커로 잘못 인식되는 것을 방지
     IGNORE_KEYWORDS = {
         "WEBSITE", "CLOSING", "GLOBAL", "EUROPE", "OTHER", "ENERGY", "METALS",
         "WATER", "MAJOR", "CANADA", "INDIA", "OCEANIA", "BRAZIL", "AFRICA",
@@ -70,7 +69,11 @@ def _extract_tickers_from_tables(
         "CONSTITUENTS", "COMPONENTS", "FTSE", "DAX", "CAC", "NIKKEI", "HANG",
         "SENG", "TOPIX", "NOTES", "REFERENCES", "EXTERNAL", "LINKS", "SEE",
         "ALSO", "MOVERS", "RISING", "FALLING", "CHANGE", "PERCENT", "VOLUME",
-        "PRICE", "HIGH", "LOW", "UK", "US", "GERMANY", "HONG", "KONG"
+        "PRICE", "HIGH", "LOW", "UK", "US", "GERMANY", "HONG", "KONG",
+        # 요구사항에 따른 추가 키워드
+        "MARKET", "MARKETS", "FINANCE", "CHINA", "WORLD", "INTERNATIONAL", 
+        "GROUP", "HOLDINGS", "CORP", "CORPORATION", "LIMITED", "LTD", "PLC", 
+        "INC", "NV", "SA", "AG", "SE", "SAPA", "IPA"
     }
 
     possible_symbol_columns = {
@@ -94,7 +97,6 @@ def _extract_tickers_from_tables(
                 break
 
         if symbol_col is None:
-            # 일부 위키 테이블은 첫 번째 컬럼이 티커인 경우도 있으므로 fallback
             if len(df.columns) > 0:
                 symbol_col = df.columns[0]
             else:
@@ -107,68 +109,64 @@ def _extract_tickers_from_tables(
             if len(ticker) < 1:
                 continue
             
-            # 2. 공백이나 콤마가 있으면 제외 (예: "SEPTEMBER 22, 2025")
+            # 2. 공백이나 콤마가 있으면 제외
             if " " in ticker or "," in ticker:
                 continue
             
-            # 3. 콜론(:)이 포함되어 있으면 제외 (예: "SECTOR:.DE" 차단)
+            # 3. 콜론(:)이 포함되어 있으면 제외
             if ":" in ticker:
                 continue
             
-            # 4. 점(.)이 2개 이상이면 제외 (예: "AIR.PA.DE", "MT.AS.PA" 차단)
-            if ticker.count(".") >= 2:
-                continue
-            
-            # 5. 접미사 제거 후 순수 심볼 부분 길이 검사 (점이 있으면 첫 번째 부분만 확인)
+            # 4. 순수 심볼 추출 (점 이전 부분만)
             pure_symbol = ticker.split(".")[0] if "." in ticker else ticker
-            if len(pure_symbol) >= 8:
-                continue  # "CONSTITUENTS" 같은 긴 단어 차단
             
-            # 6. 대문자로 변환하여 블랙리스트 검사
-            ticker_upper = ticker.upper()
-            if ticker_upper in IGNORE_KEYWORDS:
+            # 5. 미국 시장(suffix가 없는 경우)의 숫자 티커 차단
+            # 미국 티커는 알파벳만 사용하므로, 숫자로만 구성된 티커는 무조건 제외
+            if not ticker_suffix and pure_symbol.isdigit():
                 continue
             
-            # 7. "DATE", "TIME" 같은 단어가 포함되어 있으면 제외
+            # 6. 연도/날짜 필터링 강화: 순수 심볼이 4자리 숫자이고 19xx 또는 20xx로 시작하면 제외
+            if pure_symbol.isdigit() and len(pure_symbol) == 4:
+                if pure_symbol.startswith("19") or pure_symbol.startswith("20"):
+                    continue
+            
+            # 7. 블랙리스트 검사 (대문자 변환)
+            ticker_upper = ticker.upper()
+            pure_upper = pure_symbol.upper()
+            
+            if ticker_upper in IGNORE_KEYWORDS or pure_upper in IGNORE_KEYWORDS:
+                continue
+            
             if "DATE" in ticker_upper or "TIME" in ticker_upper:
                 continue
-            
-            # 8. 전체 티커 길이가 8글자 이상이면 제외 (일반적인 티커는 5글자 이내)
-            if len(ticker) >= 8:
-                continue
-            
-            # 6. 숫자로만 구성되어 있고 5글자 이상이면 제외 (예: "13000" 제외, "7203"은 허용)
-            if ticker.isdigit() and len(ticker) >= 5:
-                continue
-            
-            # 7. 숫자로만 구성되어 있고 4자리면 제외 (연도 데이터)
-            if ticker.isdigit() and len(ticker) == 4:
-                continue
-            
-            # 8. 접미사 제거 후 검증 (예: "AAPL.T" -> "AAPL"로 검증)
-            ticker_without_suffix = ticker
-            if "." in ticker:
-                ticker_without_suffix = ticker.split(".")[0]
-            
-            # 접미사 제거 후에도 블랙리스트 검사
-            if ticker_without_suffix.upper() in IGNORE_KEYWORDS:
-                continue
-            
-            # 접미사 제거 후에도 길이가 8글자 이상이면 제외
-            if len(ticker_without_suffix) >= 8:
-                continue
-            
-            # 접미사 제거 후 숫자로만 구성되어 있고 5글자 이상이면 제외
-            if ticker_without_suffix.isdigit() and len(ticker_without_suffix) >= 5:
-                continue
-            
-            # 접미사 제거 후 숫자로만 구성되어 있고 4자리면 제외
-            if ticker_without_suffix.isdigit() and len(ticker_without_suffix) == 4:
+
+            # 8. 길이 제한 강화: 숫자가 아닌 티커의 경우 순수 심볼 길이가 6글자를 초과하면 제외
+            # 단, 숫자로 된 티커(홍콩, 일본 등)는 허용
+            if not pure_symbol.isdigit() and len(pure_symbol) > 6:
                 continue
 
-            # 미국 이외 시장의 경우 접미사 부여 (예: .L, .T)
-            if ticker_suffix and not ticker.endswith(ticker_suffix):
-                ticker = f"{ticker}{ticker_suffix}"
+            # 9. 숫자로만 구성된 경우 추가 검증
+            if pure_symbol.isdigit():
+                # 접미사 없는 긴 숫자는 이상함 (5자 이상)
+                if len(pure_symbol) >= 5 and not ticker_suffix:
+                    continue
+
+            # 10. 접미사 부여 로직 개선: 이미 점(.)이 포함되어 있으면 접미사를 붙이지 않음
+            # 예: AIR.PA에는 .DE를 붙이지 않음
+            if ticker_suffix:
+                # 이미 접미사가 붙어있으면 스킵
+                if ticker.endswith(ticker_suffix):
+                    pass  # 이미 올바른 접미사가 있음
+                # 점(.)이 이미 포함되어 있으면 접미사를 붙이지 않음
+                elif "." in ticker:
+                    pass  # 이미 다른 접미사가 있으므로 중복 방지
+                else:
+                    # 점이 없을 때만 접미사 추가
+                    ticker = f"{ticker}{ticker_suffix}"
+
+            # 11. 최종 검증: 점이 2개 이상이 되었는지 확인 (중복 접미사 방지)
+            if ticker.count(".") >= 2:
+                continue
 
             tickers.append(ticker.upper())
 
@@ -533,7 +531,10 @@ async def collect_and_update_global_top_100(db: AsyncSession) -> Dict[str, Any]:
             )
             db.add(company)
 
-    # Rankings: 기존 데이터 보존, 오늘 날짜(ranking_date)로 신규 삽입
+    # Rankings: 기존 데이터 삭제 (재실행 시 중복 방지)
+    await db.execute(delete(models.Ranking).where(models.Ranking.ranking_date == ranking_date))
+
+    # Rankings: 오늘 날짜(ranking_date)로 신규 삽입
     for rank, item in enumerate(top_100, start=1):
         ranking = models.Ranking(
             year=current_year,
