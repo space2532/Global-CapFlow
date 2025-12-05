@@ -89,7 +89,7 @@ async def scheduled_monthly_top_100_collection() -> None:
             result = await collect_and_update_global_top_100(db)
             logger.info(
                 f"Monthly top 100 collection completed successfully. "
-                f"Re-evaluated {len(result)} companies."
+                f"Re-evaluated {len(result['top_100'])} companies."
             )
     except Exception as e:
         logger.error(

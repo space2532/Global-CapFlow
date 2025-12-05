@@ -149,7 +149,7 @@ async def test_top_100_collection():
         print("\n⏳ 상위 100개 기업 수집 중... (시간이 걸릴 수 있습니다)")
         result = await collect_and_update_global_top_100(db)
         
-        print(f"✅ 수집 완료: {len(result)}개 기업")
+        print(f"✅ 수집 완료: {len(result['top_100'])}개 기업")
         
         # DB에서 Ranking 확인
         current_year = datetime.utcnow().year

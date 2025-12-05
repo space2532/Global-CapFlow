@@ -427,18 +427,87 @@ async def update_rankings_db(
     await db.commit()
 
 
-async def collect_and_update_global_top_100(db: AsyncSession) -> List[Dict[str, Any]]:
+async def _calculate_ranking_changes(
+    db: AsyncSession,
+    current_top_100: List[Dict[str, Any]],
+    ranking_date: date,
+) -> Dict[str, Any]:
+    """
+    이번 랭킹과 가장 최근의 과거 랭킹을 비교해 변동 데이터를 생성합니다.
+    """
+    current_tickers: Set[str] = {item["ticker"] for item in current_top_100}
+
+    # 섹터별 통계 집계 (값이 없으면 Unknown으로 분류)
+    sector_stats: Dict[str, int] = {}
+    for item in current_top_100:
+        sector = item.get("sector") or "Unknown"
+        sector_stats[sector] = sector_stats.get(sector, 0) + 1
+
+    # 1) ranking_date 기준 직전 데이터 날짜 조회
+    latest_past_date_stmt = (
+        select(models.Ranking.ranking_date)
+        .where(models.Ranking.ranking_date.is_not(None))
+        .where(models.Ranking.ranking_date < ranking_date)
+        .order_by(models.Ranking.ranking_date.desc())
+        .limit(1)
+    )
+    result = await db.execute(latest_past_date_stmt)
+    latest_past_date = result.scalar_one_or_none()
+
+    previous_tickers: Set[str] = set()
+
+    if latest_past_date:
+        prev_stmt = select(models.Ranking.ticker).where(
+            models.Ranking.ranking_date == latest_past_date
+        )
+        prev_result = await db.execute(prev_stmt)
+        previous_tickers = set(prev_result.scalars().all())
+    else:
+        # ranking_date가 없는 기존 연/월 데이터 호환용: 직전 연도의 랭킹을 사용
+        fallback_year_stmt = (
+            select(models.Ranking.year)
+            .where(models.Ranking.year < ranking_date.year)
+            .order_by(models.Ranking.year.desc())
+            .limit(1)
+        )
+        fallback_year_result = await db.execute(fallback_year_stmt)
+        fallback_year = fallback_year_result.scalar_one_or_none()
+
+        if fallback_year is not None:
+            prev_stmt = select(models.Ranking.ticker).where(
+                models.Ranking.year == fallback_year
+            )
+            prev_result = await db.execute(prev_stmt)
+            previous_tickers = set(prev_result.scalars().all())
+
+    new_entries = sorted(current_tickers - previous_tickers)
+    exited = sorted(previous_tickers - current_tickers)
+
+    return {
+        "previous_ranking_date": latest_past_date,
+        "new_entries": new_entries,
+        "exited": exited,
+        "sector_stats": sector_stats,
+    }
+
+
+async def collect_and_update_global_top_100(db: AsyncSession) -> Dict[str, Any]:
     """
     엔드투엔드 파이프라인:
     - 주요 지수 구성 종목 티커 수집
     - yfinance로 시가총액 상위 100개 선정
-    - DB에 companies / rankings 업데이트 (년별 실행용)
+    - DB에 companies / rankings 업데이트 (과거 데이터 보존)
+    - 변동 데이터 계산 후 함께 반환
     """
     tickers = await fetch_index_tickers()
     top_100 = await fetch_top_100_data(tickers)
+    ranking_date = datetime.now(timezone.utc).date()
     
+    # 변동 데이터 계산 (기존 데이터는 유지)
+    changes = await _calculate_ranking_changes(db, top_100, ranking_date)
+
     # Rankings만 업데이트 (년별 상위 100개 기업 재조사)
-    current_year = datetime.now(timezone.utc).year
+    current_year = ranking_date.year
     tickers_list = [item["ticker"] for item in top_100]
     
     # Company 정보 업데이트
@@ -463,15 +532,12 @@ async def collect_and_update_global_top_100(db: AsyncSession) -> List[Dict[str, 
                 currency=item.get("currency"),
             )
             db.add(company)
-    
-    # Rankings: 해당 연도 데이터 전체 삭제 후, 1~100위 재삽입
-    await db.execute(
-        delete(models.Ranking).where(models.Ranking.year == current_year)
-    )
-    
+
+    # Rankings: 기존 데이터 보존, 오늘 날짜(ranking_date)로 신규 삽입
     for rank, item in enumerate(top_100, start=1):
         ranking = models.Ranking(
             year=current_year,
+            ranking_date=ranking_date,
             rank=rank,
             ticker=item["ticker"],
             market_cap=item.get("market_cap_usd"),
@@ -480,7 +546,11 @@ async def collect_and_update_global_top_100(db: AsyncSession) -> List[Dict[str, 
         db.add(ranking)
     
     await db.commit()
-    return top_100
+    return {
+        "top_100": top_100,
+        "ranking_date": ranking_date,
+        "changes": changes,
+    }
 
 
 async def _process_single_ticker_news(

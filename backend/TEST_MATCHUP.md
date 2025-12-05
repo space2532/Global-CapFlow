@@ -232,3 +232,4 @@ curl http://localhost:8000/health
 
 ### "최소 2개 이상의 티커가 필요합니다"
 → `tickers` 배열에 최소 2개의 티커를 포함하세요.
+

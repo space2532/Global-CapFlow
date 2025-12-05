@@ -31,3 +31,4 @@ END $$;
 
 -- 완료 메시지
 SELECT 'Migration completed successfully!' AS status;
+

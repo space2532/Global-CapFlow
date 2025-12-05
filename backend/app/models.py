@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import date as dt_date, datetime, timezone
+from typing import Any, Dict, Optional
 
-from sqlalchemy import Column, Text, UniqueConstraint, DateTime
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
+from sqlalchemy import Column, Text, UniqueConstraint, Date, DateTime
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy import JSON
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -73,15 +74,21 @@ class Price(SQLModel, table=True):
 
 
 class Ranking(SQLModel, table=True):
-    """연도별 시가총액 순위."""
+    """연/월별 시가총액 순위."""
 
     __tablename__ = "rankings"
+    # 월별 관리로 전환: 기존 (year, rank) → (ranking_date, rank) 유니크로 변경
     __table_args__ = (
-        UniqueConstraint("year", "rank", name="uq_rankings_year_rank"),
+        UniqueConstraint("ranking_date", "rank", name="uq_rankings_ranking_date_rank"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     year: int = Field(index=True)
+    ranking_date: Optional[dt_date] = Field(
+        default=None,
+        sa_column=Column(Date, nullable=True, index=True),
+        description="순위 산정 기준일 (월말 등). 기존 연도 데이터 호환을 위해 nullable.",
+    )
     rank: int = Field(index=True, description="해당 연도 내 시가총액 순위 (1위부터)")
     ticker: str = Field(
         foreign_key="companies.ticker",
@@ -90,6 +97,42 @@ class Ranking(SQLModel, table=True):
     )
     market_cap: Optional[float] = Field(default=None, description="해당 연도 기준 시가총액")
     company_name: str = Field(max_length=255, description="당시 사명 (이력 보존용)")
+
+
+class SectorTrend(SQLModel, table=True):
+    """월별 산업 트렌드 분석 결과."""
+
+    __tablename__ = "sector_trends"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date: dt_date = Field(
+        sa_column=Column(Date, nullable=False, index=True),
+        description="분석 기준일 (월말 등)",
+    )
+    dominant_sectors: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="상위 섹터 통계",
+    )
+    rising_sectors: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="급상승 섹터",
+    )
+    new_entries: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="신규 진입 기업 목록",
+    )
+    ai_analysis_text: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description="AI가 작성한 트렌드 분석",
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True),
+    )
 
 
 class MarketReport(SQLModel, table=True):
@@ -115,8 +158,39 @@ class MarketReport(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
     )
     source_type: str = Field(max_length=32)
+    report_period: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description='보고서 기간 식별용 (예: "2024-Q1").',
+    )
 
     # company: Optional[Company] = Relationship(back_populates="market_reports")
+
+
+class QuarterlyReport(SQLModel, table=True):
+    """분기별 기업 분석 리포트."""
+
+    __tablename__ = "quarterly_reports"
+    __table_args__ = (
+        UniqueConstraint("ticker", "year", "quarter", name="uq_quarterly_reports_ticker_year_quarter"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ticker: str = Field(
+        foreign_key="companies.ticker",
+        index=True,
+    )
+    year: int = Field(index=True)
+    quarter: int = Field(index=True, description="1~4 분기")
+    content: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description="분기별 종합 분석 텍스트",
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True),
+    )
 
 
 class AIAnalysis(SQLModel, table=True):
@@ -130,7 +204,7 @@ class AIAnalysis(SQLModel, table=True):
 
     # 응답 JSON (PostgreSQL JSONB로 매핑, 다른 DB에서는 일반 JSON/Text로 동작)
     response_json: dict | list | str = Field(
-        sa_column=Column(JSONB, nullable=False)
+        sa_column=Column(JSON, nullable=False)
     )
 
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

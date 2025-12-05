@@ -154,3 +154,4 @@ async def get_rankings_history(
     ]
     
     return rank_history_list
+

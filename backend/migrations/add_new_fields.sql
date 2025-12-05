@@ -180,3 +180,70 @@ BEGIN
         CHECK (category IN ('Stock', 'Meme', 'Product'));
     END IF;
 END $$;
+
+-- 13. rankings 테이블에 ranking_date 컬럼 추가 (월별 관리용)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'rankings' AND column_name = 'ranking_date'
+    ) THEN
+        ALTER TABLE rankings
+        ADD COLUMN ranking_date date;
+    END IF;
+END $$;
+
+-- 14. rankings 유니크 제약을 (year, rank) → (ranking_date, rank)로 변경
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'rankings'
+          AND constraint_name = 'uq_rankings_year_rank'
+    ) THEN
+        ALTER TABLE rankings
+        DROP CONSTRAINT uq_rankings_year_rank;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'rankings'
+          AND constraint_name = 'uq_rankings_ranking_date_rank'
+    ) THEN
+        ALTER TABLE rankings
+        ADD CONSTRAINT uq_rankings_ranking_date_rank
+        UNIQUE (ranking_date, rank);
+    END IF;
+END $$;
+
+-- 15. rankings.ranking_date 인덱스 추가
+CREATE INDEX IF NOT EXISTS idx_rankings_ranking_date
+    ON rankings (ranking_date);
+
+-- 16. sector_trends 테이블 생성 (월별 산업 트렌드)
+CREATE TABLE IF NOT EXISTS sector_trends (
+    id               bigserial PRIMARY KEY,
+    "date"           date NOT NULL,
+    dominant_sectors jsonb,
+    rising_sectors   jsonb,
+    new_entries      jsonb,
+    ai_analysis_text text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sector_trends_date
+    ON sector_trends ("date");
+
+-- 17. quarterly_reports 테이블 생성 (분기별 기업 분석 보고서)
+CREATE TABLE IF NOT EXISTS quarterly_reports (
+    id          bigserial PRIMARY KEY,
+    ticker      text NOT NULL REFERENCES companies (ticker) ON DELETE CASCADE,
+    "year"      integer NOT NULL,
+    quarter     integer NOT NULL,
+    content     text,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT uq_quarterly_reports_ticker_year_quarter UNIQUE (ticker, "year", quarter)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quarterly_reports_ticker_year_quarter
+    ON quarterly_reports (ticker, "year", quarter);
