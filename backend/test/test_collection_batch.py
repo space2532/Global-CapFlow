@@ -29,7 +29,7 @@ logging.basicConfig(
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_factory
-from services.collection_service import (
+from app.services.collection_service import (
     collect_and_update_global_top_100,
     fetch_top_100_data,
     fetch_index_tickers,

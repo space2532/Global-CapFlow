@@ -7,8 +7,8 @@ import datetime
 
 from .. import models, schemas
 from ..database import get_db
-from services import stock_service, news_service
-from ..services.ai_service import ai_client
+from app.services import stock_service, news_service
+from app.services.ai_service import ai_client
 
 router = APIRouter()
 

@@ -89,7 +89,10 @@ class Ranking(SQLModel, table=True):
     __tablename__ = "rankings"
     # 월별 관리로 전환: 기존 (year, rank) → (ranking_date, rank) 유니크로 변경
     __table_args__ = (
+        # 동일 기준일의 동일 순위 중복을 방지
         UniqueConstraint("ranking_date", "rank", name="uq_rankings_ranking_date_rank"),
+        # 동일 연도·티커 중복을 방지 (업서트 시 기존 데이터 교체 보장)
+        UniqueConstraint("year", "ticker", name="uq_rankings_year_ticker"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -69,3 +69,7 @@ masked_fmp_key = (
 )
 print(f"🔍 [Config] Loaded FMP API Key: {masked_fmp_key} (Length: {len(fmp_key) if fmp_key is not None else 0})")
 
+# backend/app/config.py 맨 아래에 추가
+db_url = settings.database_url
+masked_db_url = db_url.split("@")[-1] if "@" in db_url else "Unknown"
+print(f"📡 [Config] Current Database Host: {masked_db_url}")

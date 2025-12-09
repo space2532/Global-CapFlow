@@ -141,3 +141,85 @@ async def get_rankings_history(
     
     return rank_history_list
 
+
+@router.get("/movers/latest", response_model=schemas.RankingMoversResponse, summary="최신 연도 신규 진입/이탈 기업")
+async def get_latest_movers(db: AsyncSession = Depends(get_db)):
+    """
+    가장 최근 연도와 그 이전 연도의 Top 100 데이터를 비교하여
+    신규 진입(new_entries)과 이탈(exited) 기업을 반환합니다.
+    """
+    # 최신 연도 조회
+    result = await db.execute(select(func.max(models.Ranking.year)))
+    latest_year = result.scalar()
+
+    if latest_year is None:
+        return schemas.RankingMoversResponse(year=None, new_entries=[], exited=[])
+
+    # 이전 연도 조회
+    result_prev = await db.execute(
+        select(func.max(models.Ranking.year)).where(models.Ranking.year < latest_year)
+    )
+    prev_year = result_prev.scalar()
+
+    # 최신 연도 Top 100
+    stmt_latest = (
+        select(models.Ranking)
+        .options(selectinload(models.Ranking.company))
+        .where(models.Ranking.year == latest_year)
+        .order_by(models.Ranking.rank)
+        .limit(100)
+    )
+    latest_result = await db.execute(stmt_latest)
+    latest_rankings = latest_result.scalars().all()
+    latest_map = {r.ticker: r for r in latest_rankings}
+
+    prev_map = {}
+    if prev_year:
+        stmt_prev = (
+            select(models.Ranking)
+            .options(selectinload(models.Ranking.company))
+            .where(models.Ranking.year == prev_year)
+            .order_by(models.Ranking.rank)
+            .limit(100)
+        )
+        prev_result = await db.execute(stmt_prev)
+        prev_rankings = prev_result.scalars().all()
+        prev_map = {r.ticker: r for r in prev_rankings}
+
+    latest_tickers = set(latest_map.keys())
+    prev_tickers = set(prev_map.keys())
+
+    new_entries = latest_tickers - prev_tickers
+    exited = prev_tickers - latest_tickers
+
+    def _as_mover(item: models.Ranking, is_new: bool, change: int | None) -> schemas.MoverItem:
+        company = item.company
+        return schemas.MoverItem(
+            rank=item.rank,
+            ticker=item.ticker,
+            name=company.name if company else item.company_name,
+            logo_url=company.logo_url if company else None,
+            change=change,
+            is_new=is_new,
+        )
+
+    new_entries_list = [_as_mover(latest_map[t], True, None) for t in sorted(new_entries, key=lambda x: latest_map[x].rank)]
+
+    exited_list = [
+        schemas.MoverItem(
+            rank=None,
+            ticker=prev_map[t].ticker,
+            name=prev_map[t].company.name if prev_map[t].company else prev_map[t].company_name,
+            logo_url=prev_map[t].company.logo_url if prev_map[t].company else None,
+            change=None,
+            is_new=False,
+        )
+        for t in sorted(exited, key=lambda x: prev_map[x].rank)
+    ]
+
+    return schemas.RankingMoversResponse(
+        year=latest_year,
+        new_entries=new_entries_list,
+        exited=exited_list,
+    )
+

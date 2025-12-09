@@ -1,98 +1,17 @@
 import { Globe, TrendingUp, Sparkles, X, Info } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { getMarketTrends } from '../services/api';
+import type { MarketTrend } from '../types';
 
 interface SectorBlock {
   name: string;
-  shortName: string; // Abbreviated name for mobile
   percentage: number;
   size: number;
-  gridColumn: string;
-  gridRow: string;
-  minHeight?: string;
-  description?: string;
 }
 
 interface HeatmapWidgetProps {
   onNavigateToList?: (sector?: string) => void;
 }
-
-const dominantSectors: SectorBlock[] = [
-  { 
-    name: '기술/IT', 
-    shortName: '기술',
-    percentage: 28.5, 
-    size: 5,
-    gridColumn: 'span 3',
-    gridRow: 'span 2',
-    minHeight: '160px',
-    description: '클라우드, AI, 소프트웨어 중심의 기술 기업'
-  },
-  { 
-    name: '금융', 
-    shortName: '금융',
-    percentage: 18.2, 
-    size: 3,
-    gridColumn: 'span 2',
-    gridRow: 'span 2',
-    minHeight: '160px',
-    description: '은행, 증권, 보험 등 금융 서비스'
-  },
-  { 
-    name: '헬스케어', 
-    shortName: '헬스',
-    percentage: 15.7, 
-    size: 3,
-    gridColumn: 'span 2',
-    gridRow: 'span 1',
-    minHeight: '80px',
-    description: '제약, 의료기기, 바이오테크'
-  },
-  { 
-    name: '반도체', 
-    shortName: '반도체',
-    percentage: 12.4, 
-    size: 2,
-    gridColumn: 'span 2',
-    gridRow: 'span 1',
-    minHeight: '80px',
-    description: '칩 제조, 반도체 장비 및 소재'
-  },
-  { 
-    name: '소비재', 
-    shortName: '소비재',
-    percentage: 10.8, 
-    size: 2,
-    gridColumn: 'span 1',
-    gridRow: 'span 1',
-    minHeight: '80px',
-    description: '소비자 제품 및 소매 유통'
-  },
-  { 
-    name: '에너지', 
-    shortName: '에너지',
-    percentage: 8.3, 
-    size: 2,
-    gridColumn: 'span 1',
-    gridRow: 'span 1',
-    minHeight: '80px',
-    description: '석유, 가스, 신재생 에너지'
-  },
-  { 
-    name: '통신', 
-    shortName: '통신',
-    percentage: 6.1, 
-    size: 1,
-    gridColumn: 'span 1',
-    gridRow: 'span 1',
-    minHeight: '80px',
-    description: '통신 서비스 및 네트워크'
-  },
-];
-
-// Rising sector AI analysis data
-const risingSectorAnalysis = `헬스케어 섹터가 최근 AI 기반 신약 개발과 정밀 의료 기술의 획기적인 발전으로 인해 급상승하고 있습니다. 주요 제약 기업들이 생성형 AI를 활용한 신약 후보 물질 발견 시간을 기존 4-5년에서 6-12개월로 단축하면서 시장의 주목을 받고 있습니다.
-
-특히 mRNA 기술과 AI의 결합은 암, 알츠하이머, 당뇨병 등 난치성 질환 치료에 새로운 패러다임을 제시하고 있으며, 개인 맞춤형 치료제 개발이 상용화 단계에 진입하면서 투자자들의 높은 관심을 끌고 있습니다. 향후 2-3년간 헬스케어 섹터의 연평균 성장률은 25% 이상을 기록할 것으로 전망됩니다.`;
 
 function getColorClass(percentage: number): string {
   if (percentage >= 25) return 'bg-blue-500 border-blue-400';
@@ -104,6 +23,32 @@ function getColorClass(percentage: number): string {
 
 export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
   const [selectedSector, setSelectedSector] = useState<SectorBlock | null>(null);
+  const [trend, setTrend] = useState<MarketTrend | null>(null);
+
+  useEffect(() => {
+    getMarketTrends()
+      .then(setTrend)
+      .catch(() => {
+        // 실패 시 trend는 null로 남김
+      });
+  }, []);
+
+  const dominantSectors: SectorBlock[] = useMemo(() => {
+    if (!trend?.dominant_sectors?.length) return [];
+    return trend.dominant_sectors
+      .sort((a, b) => b.percentage - a.percentage)
+      .map((s, idx) => ({
+        name: s.name,
+        percentage: s.percentage,
+        size: Math.max(1, Math.min(5, Math.round(s.percentage / 6))) + (idx === 0 ? 1 : 0),
+      }));
+  }, [trend]);
+
+  const risingSectorAnalysis =
+    trend?.ai_analysis_text ||
+    'AI 분석 결과를 불러오지 못했습니다. 나중에 다시 시도해주세요.';
+
+  const updatedLabel = trend?.date ? `업데이트: ${trend.date}` : '업데이트 정보 없음';
 
   const handleSectorClick = (sector: SectorBlock) => {
     setSelectedSector(sector);
@@ -130,6 +75,9 @@ export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
         
         {/* Mobile-Optimized Squarified Treemap */}
         <div className="grid grid-cols-5 gap-2 sm:gap-3 mb-4 sm:mb-6" style={{ minHeight: '320px' }}>
+          {dominantSectors.length === 0 && (
+            <div className="text-xs text-slate-500 col-span-5">데이터 없음</div>
+          )}
           {dominantSectors.map((sector, index) => (
             <button
               key={index}
@@ -138,9 +86,9 @@ export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
                 border-2 rounded-lg sm:rounded-xl p-3 sm:p-4 flex flex-col justify-center items-center text-center
                 active:scale-95 sm:hover:scale-105 sm:hover:shadow-2xl sm:hover:brightness-110 transition-all duration-200 cursor-pointer shadow-lg text-white group relative overflow-hidden`}
               style={{ 
-                gridColumn: sector.gridColumn,
-                gridRow: sector.gridRow,
-                minHeight: sector.minHeight
+                gridColumn: `span ${Math.min(3, Math.max(1, sector.size))}`,
+                gridRow: `span ${Math.min(2, Math.max(1, Math.ceil(sector.size / 2)))}`,
+                minHeight: `${80 + sector.size * 10}px`
               }}
             >
               {/* Hover/Active overlay */}
@@ -149,7 +97,7 @@ export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
               {/* Content - Show text only if block is large enough */}
               <div className="relative flex flex-col justify-center items-center w-full gap-1">
                 <span className="text-sm sm:text-base font-semibold tracking-wide" style={{ fontSize: sector.size >= 2 ? '14px' : '12px' }}>
-                  {sector.shortName}
+                  {sector.name}
                 </span>
                 <span className="text-lg sm:text-2xl font-bold opacity-90" style={{ fontSize: sector.size >= 3 ? '24px' : '18px' }}>
                   {sector.percentage}%
@@ -189,10 +137,10 @@ export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
             {/* Sector Header */}
             <div className="mb-6">
               <div className={`${getColorClass(selectedSector.percentage)} inline-block px-4 py-1.5 rounded-full text-white text-sm mb-3`}>
-                {selectedSector.shortName}
+                {selectedSector.name}
               </div>
               <h3 className="text-2xl text-slate-100 mb-2">{selectedSector.name}</h3>
-              <p className="text-slate-400 text-sm">{selectedSector.description}</p>
+              <p className="text-slate-400 text-sm">시장 비중 기반 추정치</p>
             </div>
 
             {/* Stats */}
@@ -235,7 +183,7 @@ export function HeatmapWidget({ onNavigateToList }: HeatmapWidgetProps) {
         <div className="mt-4 pt-4 border-t border-green-700/20">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span>AI 분석 기준</span>
-            <span>업데이트: 2시간 전</span>
+            <span>{updatedLabel}</span>
           </div>
         </div>
       </div>

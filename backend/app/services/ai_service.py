@@ -5,7 +5,7 @@ from typing import Dict, List, Any
 
 from openai import AsyncOpenAI, RateLimitError
 
-from ..config import settings
+from app.config import settings
 
 
 logger = logging.getLogger(__name__)

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..services.collection_service import collect_and_update_global_top_100
+from app.services.collection_service import collect_and_update_global_top_100
 
 
 router = APIRouter(

@@ -7,8 +7,8 @@ import hashlib
 
 from .. import models, schemas
 from ..database import get_db
-from services import stock_service, news_service
-from ..services.ai_service import ai_client
+from app.services import stock_service, news_service
+from app.services.ai_service import ai_client
 
 router = APIRouter(
     prefix="/analyze",
@@ -158,6 +158,58 @@ async def fetch_ticker_data(ticker: str, db: AsyncSession) -> dict[str, Any]:
         "financials": financials_list,
         "news": news_list,
     }
+
+
+@router.get("/market/trends", response_model=schemas.SectorTrendRead, summary="최신 시장 동향 조회")
+async def get_latest_market_trends(db: AsyncSession = Depends(get_db)):
+    """
+    SectorTrend 테이블에서 가장 최신 레코드를 반환합니다.
+    데이터가 없으면 빈 기본값을 반환합니다.
+    """
+    stmt = (
+        select(models.SectorTrend)
+        .order_by(models.SectorTrend.date.desc(), models.SectorTrend.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    trend = result.scalar_one_or_none()
+
+    if not trend:
+        return schemas.SectorTrendRead(
+            date=None,
+            dominant_sectors=[],
+            rising_sectors=[],
+            ai_analysis_text=None,
+        )
+
+    # dominant_sectors는 저장 시 dict 형태일 수 있으므로 list[SectorStats]로 변환
+    def _to_sector_list(data: Any) -> list[schemas.SectorStats]:
+        if not data:
+            return []
+        if isinstance(data, dict):
+            total = sum(v for v in data.values() if isinstance(v, (int, float))) or 1
+            return [
+                schemas.SectorStats(name=k, percentage=round((v / total) * 100, 2))
+                for k, v in data.items()
+                if isinstance(v, (int, float))
+            ]
+        if isinstance(data, list):
+            # 이미 리스트라면 그대로 매핑을 시도
+            items = []
+            for item in data:
+                name = item.get("name") if isinstance(item, dict) else None
+                pct = item.get("percentage") if isinstance(item, dict) else None
+                if name and pct is not None:
+                    items.append(schemas.SectorStats(name=name, percentage=float(pct)))
+            return items
+        return []
+
+    return schemas.SectorTrendRead(
+        date=trend.date,
+        dominant_sectors=_to_sector_list(trend.dominant_sectors),
+        rising_sectors=_to_sector_list(trend.rising_sectors),
+        ai_analysis_text=trend.ai_analysis_text,
+    )
 
 
 @router.post("/matchup", response_model=schemas.MatchupResponse, summary="기업 비교 분석 (Matchup)")

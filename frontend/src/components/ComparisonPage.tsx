@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Header } from './Header';
-import { Search, X, Zap, ArrowLeft, TrendingUp, DollarSign, Brain, BarChart3, Shield, Sparkles, Check } from 'lucide-react';
+import { Search, X, Zap, ArrowLeft, TrendingUp, DollarSign, Brain, Shield, Sparkles, Check } from 'lucide-react';
+import { analyzeMatchup } from '../services/api';
+import { MatchupResponse } from '../types';
 
 interface Company {
   id: string;
@@ -9,15 +11,6 @@ interface Company {
   logoUrl: string;
   sector: string;
   rank: number;
-}
-
-interface ComparisonData {
-  marketCapComparison: string;
-  aiGrowthPotential: string;
-  financialHealth: string;
-  competitiveAdvantage: string;
-  riskAssessment: string;
-  investmentRecommendation: string;
 }
 
 // Generate Top 100 companies
@@ -140,27 +133,12 @@ const allCompanies = generateTopCompanies();
 // Extract unique sectors
 const allSectors = ['전체', ...Array.from(new Set(allCompanies.map(c => c.sector))).sort()];
 
-// Mock AI comparison generator
-function generateComparison(company1: Company, company2: Company): ComparisonData {
-  return {
-    marketCapComparison: `${company1.name}과 ${company2.name}의 시가총액을 비교하면, 두 기업 모두 각자의 산업에서 지배적인 위치를 차지하고 있습니다. ${company1.name}은 강력한 브랜드 가치와 충성도 높은 고객 기반을 보유하고 있으며, ${company2.name}은 혁신적인 기술력과 시장 확장성을 바탕으로 지속적인 성장을 이어가고 있습니다.\n\n과거 5년간의 시가총액 변화를 분석하면, ${company1.name}은 연평균 15-20%의 성장률을 기록했으며, ${company2.name}은 20-25%의 더 높은 성장세를 보였습니다. 이는 ${company2.name}이 새로운 시장 기회를 더 적극적으로 포착하고 있음을 시사합니다.`,
-    
-    aiGrowthPotential: `AI 기술 통합 측면에서 두 기업은 서로 다른 접근 방식을 취하고 있습니다. ${company1.name}은 AI를 기존 제품 라인에 통합하여 사용자 경험을 향상시키는 데 집중하고 있으며, ${company2.name}은 AI를 핵심 경쟁력으로 활용하여 새로운 시장을 개척하고 있습니다.\n\n${company1.name}의 AI 관련 R&D 투자는 전체 매출의 약 8-10%를 차지하며, ${company2.name}은 12-15%로 더 높은 비율을 보이고 있습니다. 향후 3-5년간 AI 기술이 가져올 성장 잠재력을 고려할 때, ${company2.name}이 더 공격적인 성장 전략을 추구하고 있다고 평가됩니다.\n\n특히 생성형 AI, 자율주행, 그리고 산업용 AI 솔루션 분야에서 두 기업 모두 중요한 발전을 이루고 있으며, 이는 장기적인 수익 창출의 핵심 동력이 될 것으로 예상됩니다.`,
-    
-    financialHealth: `재무 건전성 측면에서 두 기업 모두 업계 최고 수준의 지표를 보유하고 있습니다.\n\n${company1.name}의 주요 재무 지표:\n• 부채비율: 35-40% (낮은 수준의 안정적 레버리지)\n• 현금 보유액: 600-800억 달러\n• 영업이익률: 25-30%\n• ROE: 45-55%\n\n${company2.name}의 주요 재무 지표:\n• 부채비율: 25-30% (매우 보수적인 재무 구조)\n• 현금 보유액: 400-600억 달러\n• 영업이익률: 30-35%\n• ROE: 50-60%\n\n두 기업 모두 강력한 현금 흐름 창출 능력을 보유하고 있으며, 배당금 지급과 자사주 매입을 통해 주주 가치를 적극적으로 환원하고 있습니다. ${company2.name}이 상대적으로 더 높은 수익성을 보이고 있으나, ${company1.name}의 안정적인 재무 구조도 매우 우수한 수준입니다.`,
-    
-    competitiveAdvantage: `${company1.name}의 핵심 경쟁우위는 브랜드 파워, 생태계 통합력, 그리고 고객 충성도에 있습니다. 수십 년간 구축된 브랜드 가치는 프리미엄 가격 전략을 가능하게 하며, 이는 업계 최고 수준의 마진율로 이어집니다.\n\n${company2.name}의 경쟁우위는 기술 혁신력, 시장 선점 능력, 그리고 규모의 경제에 있습니다. 지속적인 R&D 투자를 통해 차세대 기술을 선도하고 있으며, 이는 장기적인 시장 지배력을 강화합니다.\n\n두 기업 모두 높은 진입 장벽과 전환 비용을 형성하고 있어, 경쟁사의 시장 침투가 매우 어려운 구조를 갖추고 있습니다. 특히 네트워크 효과와 데이터 축적은 시간이 지날수록 경쟁우위를 더욱 공고히 하는 요소입니다.`,
-    
-    riskAssessment: `${company1.name}의 주요 리스크 요인:\n• 특정 제품군에 대한 높은 의존도\n• 중국 시장에서의 지정학적 리스크\n• 규제 당국의 반독점 조사 가능성\n• 시장 포화도 증가에 따른 성장 둔화 우려\n\n${company2.name}의 주요 리스크 요인:\n• 급격한 기술 변화에 따른 사업 모델 변동성\n• 신규 경쟁자 등장으로 인한 시장 점유율 위협\n• 높은 성장 기대에 따른 밸류에이션 프리미엄 부담\n• 글로벌 경기 침체 시 수요 감소 가능성\n\n두 기업 모두 체계적인 리스크 관리 시스템을 갖추고 있으며, 다각화된 사업 포트폴리오를 통해 특정 시장의 변동성을 완화하고 있습니다.`,
-    
-    investmentRecommendation: `종합적인 투자 관점에서, 두 기업 모두 장기 투자자에게 매력적인 선택지입니다.\n\n${company1.name} 투자 추천:\n• 투자 성향: 안정적 성장과 배당 수익을 추구하는 보수적 투자자\n• 기대 수익률: 연 10-15% (중장기)\n• 핵심 논거: 검증된 비즈니스 모델, 강력한 브랜드 파워, 안정적 현금흐름\n\n${company2.name} 투자 추천:\n• 투자 성향: 높은 성장 잠재력을 추구하는 공격적 투자자\n• 기대 수익률: 연 15-25% (중장기)\n• 핵심 논거: 혁신적 기술력, 시장 확장 기회, AI 시대의 핵심 수혜주\n\n포트폴리오 전략 측면에서, 두 기업에 분산 투자하여 안정성과 성장성을 동시에 추구하는 것도 효과적인 접근법입니다. 현재 시장 밸류에이션을 고려할 때, ${company1.name}은 적정 가격 수준이며, ${company2.name}은 다소 프리미엄이 반영되어 있으나 성장 잠재력을 감안하면 합리적인 수준으로 판단됩니다.`
-  };
-}
-
 export function ComparisonPage() {
   const [selectedCompanies, setSelectedCompanies] = useState<Company[]>([]);
   const [showComparison, setShowComparison] = useState(false);
-  const [comparisonData, setComparisonData] = useState<ComparisonData | null>(null);
+  const [matchup, setMatchup] = useState<MatchupResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSector, setSelectedSector] = useState('전체');
 
@@ -172,18 +150,26 @@ export function ComparisonPage() {
     }
   };
 
-  const handleAnalyze = () => {
+  const handleAnalyze = async () => {
     if (selectedCompanies.length === 2) {
-      const data = generateComparison(selectedCompanies[0], selectedCompanies[1]);
-      setComparisonData(data);
-      setShowComparison(true);
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await analyzeMatchup([selectedCompanies[0].ticker, selectedCompanies[1].ticker]);
+        setMatchup(res);
+        setShowComparison(true);
+      } catch (err) {
+        setError((err as Error).message || '분석에 실패했습니다.');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
   const handleBack = () => {
     setShowComparison(false);
     setSelectedCompanies([]);
-    setComparisonData(null);
+    setMatchup(null);
   };
 
   const isSelected = (companyId: string) => {
@@ -205,7 +191,7 @@ export function ComparisonPage() {
   }, [searchTerm, selectedSector]);
 
   // State 2: Comparison Result View (Split-screen)
-  if (showComparison && comparisonData && selectedCompanies.length === 2) {
+  if (showComparison && matchup && selectedCompanies.length === 2) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
         <Header />
@@ -281,81 +267,54 @@ export function ComparisonPage() {
 
           {/* AI Analysis Report Sections */}
           <div className="space-y-6">
-            {/* Market Cap Comparison */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-blue-500/20 rounded-xl">
                   <DollarSign className="size-6 text-blue-400" />
                 </div>
-                <h3 className="text-2xl text-slate-100">시가총액 비교</h3>
+                <h3 className="text-2xl text-slate-100">AI 종합 요약</h3>
               </div>
               <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.marketCapComparison}
+                {matchup.summary}
               </div>
             </div>
 
-            {/* AI Growth Potential */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-purple-500/20 rounded-xl">
                   <Brain className="size-6 text-purple-400" />
                 </div>
-                <h3 className="text-2xl text-slate-100">AI 성장 잠재력</h3>
+                <h3 className="text-2xl text-slate-100">주요 비교 포인트</h3>
               </div>
-              <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.aiGrowthPotential}
-              </div>
-            </div>
-
-            {/* Financial Health */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-green-500/20 rounded-xl">
-                  <BarChart3 className="size-6 text-green-400" />
-                </div>
-                <h3 className="text-2xl text-slate-100">재무 건전성</h3>
-              </div>
-              <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.financialHealth}
+              <div className="space-y-4">
+                {matchup.key_comparison.map((item, idx) => (
+                  <div key={idx} className="bg-slate-900/40 border border-slate-700/50 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-slate-200 font-semibold">{item.metric}</div>
+                      <div className="px-3 py-1 rounded-lg bg-blue-500/20 text-blue-300 text-sm">
+                        승자: {item.winner}
+                      </div>
+                    </div>
+                    <div className="text-slate-300 leading-relaxed">{item.reason}</div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* Competitive Advantage */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-cyan-500/20 rounded-xl">
-                  <TrendingUp className="size-6 text-cyan-400" />
-                </div>
-                <h3 className="text-2xl text-slate-100">경쟁 우위</h3>
-              </div>
-              <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.competitiveAdvantage}
-              </div>
-            </div>
-
-            {/* Risk Assessment */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-yellow-500/20 rounded-xl">
-                  <Shield className="size-6 text-yellow-400" />
-                </div>
-                <h3 className="text-2xl text-slate-100">리스크 평가</h3>
-              </div>
-              <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.riskAssessment}
-              </div>
-            </div>
-
-            {/* Investment Recommendation */}
             <div className="bg-gradient-to-br from-blue-900/30 to-purple-900/20 border border-blue-500/30 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-blue-500/20 rounded-xl">
                   <Sparkles className="size-6 text-blue-400" />
                 </div>
-                <h3 className="text-2xl text-slate-100">투자 추천</h3>
+                <h3 className="text-2xl text-slate-100">AI 결정</h3>
               </div>
-              <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
-                {comparisonData.investmentRecommendation}
+              <div className="flex flex-col gap-3">
+                <div className="text-lg text-slate-200">
+                  최종 승자: <span className="text-blue-300 font-semibold">{matchup.winner}</span>
+                </div>
+                <div className="text-slate-300 leading-relaxed bg-slate-900/40 rounded-xl p-4 border border-slate-700/50">
+                  {matchup.reason}
+                </div>
               </div>
             </div>
           </div>
@@ -505,18 +464,25 @@ export function ComparisonPage() {
         <div className="max-w-7xl mx-auto">
           <button
             onClick={handleAnalyze}
-            disabled={selectedCompanies.length !== 2}
+            disabled={selectedCompanies.length !== 2 || loading}
             className={`w-full max-w-md mx-auto flex items-center justify-center gap-3 px-8 py-5 rounded-2xl shadow-2xl transition-all duration-300 ${
-              selectedCompanies.length === 2
+              selectedCompanies.length === 2 && !loading
                 ? 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-blue-500/50 hover:scale-105 cursor-pointer'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed'
             }`}
           >
-            <Zap className={`size-6 ${selectedCompanies.length === 2 ? 'animate-pulse' : ''}`} />
+            {loading ? (
+              <div className="w-5 h-5 border-2 border-slate-300 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Zap className={`size-6 ${selectedCompanies.length === 2 ? 'animate-pulse' : ''}`} />
+            )}
             <span className="text-xl">
               비교하기 ({selectedCompanies.length}/2)
             </span>
           </button>
+          {error && (
+            <div className="mt-2 text-sm text-red-400 text-center">{error}</div>
+          )}
         </div>
       </div>
     </div>

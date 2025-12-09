@@ -1,4 +1,4 @@
-from datetime import date, datetime
+import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -22,7 +22,7 @@ class CompanyRead(CompanyBase):
 
 class PriceBase(BaseModel):
     ticker: str
-    price_date: date
+    price_date: datetime.date
     open_price: Decimal | None = None
     high_price: Decimal | None = None
     low_price: Decimal | None = None
@@ -51,7 +51,7 @@ class FinancialRead(BaseModel):
 class MarketReportRead(BaseModel):
     summary_content: str
     sentiment_score: float
-    collected_at: datetime
+    collected_at: datetime.datetime
     source_type: str
 
     model_config = {"from_attributes": True}
@@ -98,7 +98,7 @@ class RankingRead(BaseModel):
 
 class PriceHistoryRead(BaseModel):
     """차트용 시계열 데이터 스키마"""
-    date: datetime
+    date: datetime.datetime
     close: float | None = None
     market_cap: float | None = None
     volume: int | None = None
@@ -126,5 +126,37 @@ class RankHistoryRead(BaseModel):
 class RankHistoryResponse(BaseModel):
     """순위 히스토리 응답 스키마 (티커별 그룹화)"""
     data: dict[str, list[RankHistoryItem]]
+
+
+# === Market / Trend & Movers ===
+class SectorStats(BaseModel):
+    """섹터별 비중 정보"""
+    name: str
+    percentage: float
+
+
+class SectorTrendRead(BaseModel):
+    """최신 시장 동향"""
+    date: datetime.date | None = None
+    dominant_sectors: list[SectorStats] = []
+    rising_sectors: list[SectorStats] = []
+    ai_analysis_text: str | None = None
+
+
+class MoverItem(BaseModel):
+    """순위 변동 기업 정보"""
+    rank: int | None = None
+    ticker: str
+    name: str
+    logo_url: str | None = None
+    change: int | None = None  # 양수: 상승폭, 음수: 하락폭, None: 신규/이탈 정보만
+    is_new: bool = False
+
+
+class RankingMoversResponse(BaseModel):
+    """연도별 신규 진입/이탈 기업 리스트"""
+    year: int | None = None
+    new_entries: list[MoverItem] = []
+    exited: list[MoverItem] = []
 
 
