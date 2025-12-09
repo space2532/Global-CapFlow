@@ -1,5 +1,5 @@
 import { Header } from './Header';
-import { ArrowLeft, TrendingUp, TrendingDown, Activity, DollarSign, Building2, MapPin, Globe } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown, Activity, DollarSign, Building2, MapPin, Globe, Newspaper, ExternalLink } from 'lucide-react';
 
 interface StockProfileProps {
   ticker: string;
@@ -11,6 +11,15 @@ interface FinancialData {
   revenue: string;
   netIncome: string;
   per: string;
+}
+
+interface NewsItem {
+  id: string;
+  title: string;
+  aiSummary: string;
+  source: string;
+  sourceUrl: string;
+  publishedDate: string;
 }
 
 // Mock data for demonstration
@@ -46,7 +55,35 @@ const mockStockData = {
     { period: '2023 Q3', revenue: '$81.8B', netIncome: '$19.9B', per: '29.8' },
     { period: '2023 Q2', revenue: '$94.8B', netIncome: '$24.2B', per: '30.2' },
     { period: '2023 Q1', revenue: '$117.2B', netIncome: '$30.0B', per: '28.9' },
-  ] as FinancialData[]
+  ] as FinancialData[],
+  
+  // News Data
+  news: [
+    {
+      id: '1',
+      title: 'Apple Reports Q4 Earnings: Revenue Up 8.2%, Net Income Up 12.5%',
+      aiSummary: 'Apple reported strong Q4 earnings with revenue up 8.2% and net income up 12.5% compared to the same period last year. The company\'s services segment saw double-digit growth, and the Asia-Pacific region showed significant revenue increases.',
+      source: 'Bloomberg',
+      sourceUrl: 'https://www.bloomberg.com/news/articles/2024-02-01/apple-reports-q4-earnings-revenue-up-8-2-net-income-up-12-5',
+      publishedDate: '2024-02-01'
+    },
+    {
+      id: '2',
+      title: 'Apple Launches Vision Pro: A New Era in Spatial Computing',
+      aiSummary: 'Apple unveiled Vision Pro, a revolutionary spatial computing device that combines advanced AI and augmented reality. The product is expected to open up new opportunities in the spatial computing market and enhance Apple\'s product lineup.',
+      source: 'The Verge',
+      sourceUrl: 'https://www.theverge.com/2024/1/10/27945656/apple-vision-pro-launch-spatial-computing',
+      publishedDate: '2024-01-10'
+    },
+    {
+      id: '3',
+      title: 'Apple\'s iPhone 15 Series: A Strong Start to the New Year',
+      aiSummary: 'The iPhone 15 series had a strong launch, meeting and exceeding market expectations. The new models received positive reviews for their design, performance, and features, contributing to Apple\'s continued market leadership in the smartphone industry.',
+      source: 'CNET',
+      sourceUrl: 'https://www.cnet.com/news/apple-iphone-15-series-launch-review/',
+      publishedDate: '2023-09-12'
+    }
+  ] as NewsItem[]
 };
 
 function getSentimentColor(score: number): { bg: string; text: string; barBg: string } {
@@ -202,6 +239,57 @@ export function StockProfilePage({ ticker, onBack }: StockProfileProps) {
                   {data.aiReport.quarterlyReport}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* AI News Briefing Section */}
+        <div className="mb-8">
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl shadow-xl overflow-hidden">
+            <div className="p-6 border-b border-slate-700">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-700 rounded-xl">
+                  <Newspaper className="size-5 text-slate-300" />
+                </div>
+                <div>
+                  <h2 className="text-2xl text-slate-100">최신 뉴스 AI 요약</h2>
+                  <p className="text-sm text-slate-400 mt-1">AI가 분석한 주요 뉴스 및 시장 동향</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* News Cards */}
+            <div className="p-6 space-y-4">
+              {data.news.map((newsItem) => (
+                <div
+                  key={newsItem.id}
+                  className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 hover:border-slate-600 transition-all"
+                >
+                  {/* News Title */}
+                  <h3 className="text-slate-100 mb-3 leading-snug">
+                    {newsItem.title}
+                  </h3>
+                  
+                  {/* AI Summary */}
+                  <p className="text-slate-300 leading-relaxed mb-4 text-sm">
+                    {newsItem.aiSummary}
+                  </p>
+                  
+                  {/* Source Footer */}
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-700/50">
+                    <a
+                      href={newsItem.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors group"
+                    >
+                      <span>출처: {newsItem.source}</span>
+                      <ExternalLink className="size-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                    </a>
+                    <span className="text-xs text-slate-500">{newsItem.publishedDate}</span>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
