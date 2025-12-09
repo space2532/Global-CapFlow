@@ -10,10 +10,18 @@
 
 import asyncio
 import sys
+import logging
 from pathlib import Path
 
-# 프로젝트 루트를 Python 경로에 추가
-backend_path = Path(__file__).parent
+# 로깅 설정 (콘솔 출력)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# 프로젝트 루트를 Python 경로에 추가 (backend 디렉토리 기준)
+backend_path = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_path))
 
 from app.services.scheduler_service import (
@@ -130,4 +138,6 @@ if __name__ == "__main__":
         asyncio.run(quick_test())
     else:
         asyncio.run(test_all_scheduled_jobs())
+
+
 

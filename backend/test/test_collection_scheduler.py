@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # 프로젝트 루트를 Python 경로에 추가
-backend_path = Path(__file__).parent
+backend_path = Path(__file__).parent.parent  # backend 디렉토리
 sys.path.insert(0, str(backend_path))
 
 from sqlalchemy import select

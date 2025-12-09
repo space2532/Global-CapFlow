@@ -7,7 +7,7 @@ import datetime
 
 from .. import models, schemas
 from ..database import get_db
-from ..services import stock_service, news_service
+from services import stock_service, news_service
 from ..services.ai_service import ai_client
 
 router = APIRouter()
@@ -177,6 +177,7 @@ async def fetch_company_data(
         industry=company.industry,
         country=company.country,
         currency=company.currency,
+        logo_url=company.logo_url,
         financials=[schemas.FinancialRead.model_validate(fin) for fin in financials],
         latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None
     )
@@ -221,6 +222,7 @@ async def get_company_detail(ticker: str, db: AsyncSession = Depends(get_db)):
         industry=company.industry,
         country=company.country,
         currency=company.currency,
+        logo_url=company.logo_url,
         financials=[schemas.FinancialRead.model_validate(fin) for fin in financials],
         latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None
     )

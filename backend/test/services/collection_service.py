@@ -1,7 +1,5 @@
 import asyncio
 import io
-import logging
-import random
 from datetime import datetime, date, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from io import StringIO
@@ -16,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..config import settings
-from services import news_service, stock_service
+from . import news_service, stock_service
 from .ai_service import ai_client
 
 # 환율 캐시 (통화 → USD 환산율)
@@ -599,12 +597,11 @@ WIKI_INDEX_SOURCES = [
         "suffix": "",
         "country": "United States",
     },
-    # 수집량 감소 요청에 따라 NASDAQ-100 임시 비활성화
-    # {
-    #     "url": "https://en.wikipedia.org/wiki/NASDAQ-100",
-    #     "suffix": "",
-    #     "country": "United States",
-    # },
+    {
+        "url": "https://en.wikipedia.org/wiki/NASDAQ-100",
+        "suffix": "",
+        "country": "United States",
+    },
     {
         "url": "https://en.wikipedia.org/wiki/CAC_40",
         "suffix": "",
@@ -621,24 +618,24 @@ WIKI_INDEX_SOURCES = [
         "special_handling": "dax",  # DAX는 특별 처리 필요
         "country": "Germany",
     },
-    # {
-    #     "url": "https://en.wikipedia.org/wiki/Nikkei_225",
-    #     "suffix": "",
-    #     "special_handling": "nikkei_225",  # Nikkei 225는 특별 처리 필요
-    #     "country": "Japan",
-    # },
+    {
+        "url": "https://en.wikipedia.org/wiki/Nikkei_225",
+        "suffix": "",
+        "special_handling": "nikkei_225",  # Nikkei 225는 특별 처리 필요
+        "country": "Japan",
+    },
     {
         "url": "https://en.wikipedia.org/wiki/Hang_Seng_Index",
         "suffix": "",
         "special_handling": "hang_seng",  # Hang Seng Index는 특별 처리 필요
         "country": "Hong Kong",
     },
-    # {
-    #     "url": "https://en.wikipedia.org/wiki/CSI_300_Index",
-    #     "suffix": "",
-    #     "special_handling": "csi_300",  # CSI 300 Index는 특별 처리 필요
-    #     "country": "China",
-    # },
+    {
+        "url": "https://en.wikipedia.org/wiki/CSI_300_Index",
+        "suffix": "",
+        "special_handling": "csi_300",  # CSI 300 Index는 특별 처리 필요
+        "country": "China",
+    },
 ]
 
 # 특별 처리 대상 URL 상수
@@ -1012,102 +1009,68 @@ async def fetch_index_tickers() -> Dict[str, str]:
 
 
 async def _fetch_single_ticker_yf(ticker: str) -> Optional[Dict[str, Any]]:
-    """yfinance로 단일 티커의 시가총액 / 가격 / 회사 정보 조회.
+    """yfinance로 단일 티커의 시가총액 / 가격 / 회사 정보 조회. (국가 정보 수집 로직 제거)"""
 
-    전략:
-    1) fast_info 우선 사용 (가벼움)
-    2) fast_info 실패 시에만 .info + 백오프 재시도
-    """
-    logger = logging.getLogger(__name__)
+    def _sync_job() -> Optional[Dict[str, Any]]:
+        import logging
+        import random
+        import time
 
-    async def _fetch_fast_info() -> Optional[Dict[str, Any]]:
-        def _sync_fetch_fast() -> Optional[Dict[str, Any]]:
-            t = yf.Ticker(ticker)
-            fi = getattr(t, "fast_info", None)
-            if not fi:
-                return None
+        logger = logging.getLogger(__name__)
+        max_attempts = 3
+        last_error: Optional[Exception] = None
 
-            market_cap_fast = getattr(fi, "market_cap", None)
-            if market_cap_fast is None:
-                return None  # market_cap 없으면 Fallback 진행
-
-            return {
-                "marketCap": market_cap_fast,
-                "currentPrice": getattr(fi, "last_price", None),
-                "currency": getattr(fi, "currency", None),
-                "volume": getattr(fi, "last_volume", None),
-                # fast_info에는 상세 정보가 없을 수 있으니 기본값 지정
-                "longName": ticker,
-                "shortName": ticker,
-                "sector": None,
-                "industry": None,
-            }
-
-        return await asyncio.to_thread(_sync_fetch_fast)
-
-    async def _get_info_with_retry(max_retries: int = 3) -> Optional[Dict[str, Any]]:
-        for attempt in range(max_retries):
+        for attempt in range(1, max_attempts + 1):
+            info: Dict[str, Any] = {}
             try:
-                def _sync_fetch_info() -> Dict[str, Any]:
-                    t = yf.Ticker(ticker)
-                    return t.info or {}
-
-                info = await asyncio.to_thread(_sync_fetch_info)
-                market_cap = info.get("marketCap")
-                price = info.get("currentPrice") or info.get("regularMarketPrice")
-                if market_cap is None and price is None:
-                    raise ValueError("Empty data from yfinance")
-                return info
-
+                t = yf.Ticker(ticker)
+                info = t.info or {}
             except Exception as e:
-                is_last = attempt == max_retries - 1
-                err_lower = str(e).lower()
+                last_error = e
+                logger.warning(
+                    f"[yf] {ticker} info fetch failed (try {attempt}/{max_attempts}): "
+                    f"{type(e).__name__}: {str(e)[:150]}"
+                )
 
-                if "rate limit" in err_lower or "too many requests" in err_lower or "429" in err_lower:
-                    wait_time = 10 + (attempt * 10)  # 10s -> 20s -> 30s
-                    if not is_last:
-                        logger.warning(f"⛔ [Rate Limit] {ticker}: {wait_time}s 대기 후 재시도 ({attempt + 1}/{max_retries})")
-                else:
-                    wait_time = min(5, (2 ** attempt) + random.uniform(0, 1))
-                    if not is_last:
-                        logger.warning(
-                            f"⚠️ [Retry] {ticker}: {wait_time:.1f}s 후 재시도 ({attempt + 1}/{max_retries}) - {type(e).__name__}: {e}"
-                        )
+            market_cap = info.get("marketCap")
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
 
-                if is_last:
-                    logger.error(f"❌ {ticker} 최종 실패: {type(e).__name__}: {e}")
-                    return None
+            if market_cap is not None or price is not None:
+                data: Dict[str, Any] = {
+                    "ticker": ticker,
+                    "name": info.get("longName") or info.get("shortName") or ticker,
+                    "sector": info.get("sector"),
+                    "industry": info.get("industry"),
+                    "currency": info.get("currency"),
+                    # 현지통화 기준 시가총액 (원본)
+                    "market_cap_local": float(market_cap) if market_cap is not None else None,
+                    "price": float(price) if price is not None else None,
+                    "volume": info.get("volume"),
+                }
+                # market_cap는 하위 호환성을 위해 유지
+                data["market_cap"] = data["market_cap_local"]
+                return data
 
-                await asyncio.sleep(wait_time)
+            if attempt < max_attempts:
+                delay = random.uniform(1, 2)
+                logger.warning(
+                    f"[yf] {ticker} missing marketCap/price (try {attempt}/{max_attempts}); "
+                    f"retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
 
+        if last_error:
+            logger.warning(
+                f"[yf] {ticker} failed after {max_attempts} tries: "
+                f"{type(last_error).__name__}: {str(last_error)[:150]}"
+            )
+        else:
+            logger.warning(f"[yf] {ticker} missing marketCap/price after {max_attempts} tries")
         return None
 
-    # 1) Fast path
-    info = await _fetch_fast_info()
-
-    # 2) Fallback to .info with backoff
-    if not info:
-        info = await _get_info_with_retry()
-
-    if not info:
+    data = await asyncio.to_thread(_sync_job)
+    if data is None:
         return None
-
-    market_cap = info.get("marketCap")
-    price = info.get("currentPrice") or info.get("regularMarketPrice")
-
-    data: Dict[str, Any] = {
-        "ticker": ticker,
-        "name": info.get("longName") or info.get("shortName") or ticker,
-        "sector": info.get("sector") or "Unknown",
-        "industry": info.get("industry") or "Unknown",
-        "currency": info.get("currency"),
-        "market_cap_local": float(market_cap) if market_cap is not None else None,
-        "price": float(price) if price is not None else None,
-        "volume": info.get("volume"),
-    }
-
-    # market_cap는 하위 호환성을 위해 유지
-    data["market_cap"] = data["market_cap_local"]
 
     market_cap_local = data.get("market_cap_local")
     currency = data.get("currency") or "USD"
@@ -1186,109 +1149,85 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
     
     tickers = list(tickers_map.keys())
     
-    logger.info(f"📊 [Step 2] 데이터 수집 시작: {len(tickers)}개 티커에 대해 fast_info 기반 1차 스캔 후 상위 100개 선정")
-    logger.info(f"   (1차 fast_info 스캔 → Top100 확정 → Top100만 상세 조회, 배치 간 3.0초 대기)")
-
-    async def _fetch_fast_marketcap(ticker: str) -> Optional[Dict[str, Any]]:
-        def _sync_fast() -> Optional[Dict[str, Any]]:
-            t = yf.Ticker(ticker)
-            fi = getattr(t, "fast_info", None)
-            if not fi:
-                return None
-            mc = getattr(fi, "market_cap", None)
-            if mc is None:
-                return None
-            return {
-                "ticker": ticker,
-                "market_cap_local": float(mc),
-                "price": getattr(fi, "last_price", None),
-                "currency": getattr(fi, "currency", None),
-                "volume": getattr(fi, "last_volume", None),
-                "name": ticker,
-                "sector": None,
-                "industry": None,
-            }
-
-        fast = await asyncio.to_thread(_sync_fast)
-        if not fast:
-            return None
-
-        currency = fast.get("currency") or "USD"
-        rate = await get_usd_exchange_rate(currency)
-        fast["market_cap_usd"] = fast["market_cap_local"] * rate
-        fast["market_cap"] = fast["market_cap_local"]
-        return fast
-
-    # 1차: fast_info만으로 전체 스캔
-    fast_tasks = [asyncio.create_task(_fetch_fast_marketcap(t)) for t in tickers]
-    fast_results = await asyncio.gather(*fast_tasks, return_exceptions=True)
-
-    fast_valid: List[Dict[str, Any]] = []
-    fast_map: Dict[str, Dict[str, Any]] = {}
-    for ticker_val, result in zip(tickers, fast_results):
-        if isinstance(result, Exception):
-            logger.debug(f"   fast_info 실패 ({ticker_val}): {type(result).__name__}: {str(result)[:100]}")
-            continue
-        if result and result.get("market_cap_usd") is not None:
-            fast_valid.append(result)
-            fast_map[ticker_val] = result
-
-    if not fast_valid:
-        logger.error("❌ fast_info 기반 스캔 실패: 유효한 시가총액 데이터를 찾지 못했습니다.")
-        return []
-
-    fast_valid.sort(key=lambda x: x["market_cap_usd"] or 0.0, reverse=True)
-    top_fast = fast_valid[:100]
-    top_fast_tickers = [item["ticker"] for item in top_fast]
-
-    logger.info(f"✅ 1차 fast_info 스캔 완료: 유효 {len(fast_valid)}개, Top100 확정")
-    logger.debug(f"   Top3(fast): {[item['ticker'] for item in top_fast[:3]]}")
-
-    # 2차: Top 100만 상세 조회 (필요 시 .info Fallback)
+    logger.info(f"📊 [Step 2] 데이터 수집 시작: {len(tickers)}개 티커에 대해 yfinance로 데이터 수집 중...")
+    logger.info(f"   (배치 처리: {len(tickers)}개 티커를 20개씩 처리, 배치 간 1.5초 대기)")
+    
+    # 배치 처리 설정
     BATCH_SIZE = 20
-    detailed_results: List[Optional[Dict[str, Any]]] = []
-    total = len(top_fast_tickers)
-
-    for batch_start in range(0, total, BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, total)
-        batch_tickers = top_fast_tickers[batch_start:batch_end]
-
-        logger.info(f"   상세 배치 처리: {batch_start + 1}~{batch_end}/{total}")
-
-        async def _fetch_with_fallback(ticker: str):
+    results = []
+    completed = 0
+    total = len(tickers)
+    
+    # 배치 단위로 처리
+    for batch_start in range(0, len(tickers), BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, len(tickers))
+        batch_tickers = tickers[batch_start:batch_end]
+        
+        logger.info(f"   배치 처리: {batch_start + 1}~{batch_end}/{total} ({batch_end*100//total}%)")
+        
+        # 배치 내에서 병렬 처리
+        async def _fetch_with_exception_handling(ticker: str):
             try:
-                detailed = await _fetch_single_ticker_yf(ticker)
-                # 상세 실패 시 fast_info 결과라도 반환하여 순위 유지
-                return detailed or fast_map.get(ticker)
+                return await _fetch_single_ticker_yf(ticker)
             except Exception as e:
-                logger.debug(f"   상세 조회 실패 ({ticker}): {type(e).__name__}: {str(e)[:100]}")
-                return fast_map.get(ticker)
-
-        batch_tasks = [asyncio.create_task(_fetch_with_fallback(t)) for t in batch_tickers]
+                logger.debug(f"   티커 조회 실패 ({ticker}): {type(e).__name__}: {str(e)[:100]}")
+                return None
+        
+        batch_tasks = [asyncio.create_task(_fetch_with_exception_handling(t)) for t in batch_tickers]
         batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-
-        for idx, res in enumerate(batch_results):
-            if isinstance(res, Exception):
-                logger.debug(f"   상세 예외 ({batch_tickers[idx]}): {type(res).__name__}: {str(res)[:100]}")
-                res = fast_map.get(batch_tickers[idx])
-            detailed_results.append(res)
-
+        
+        # 예외를 None으로 변환
+        for i, result in enumerate(batch_results):
+            if isinstance(result, Exception):
+                logger.debug(f"   티커 조회 예외 ({batch_tickers[i]}): {type(result).__name__}: {str(result)[:100]}")
+                batch_results[i] = None
+        
+        results.extend(batch_results)
+        completed = len(results)
+        
+        # 마지막 배치가 아니면 대기
         if batch_end < total:
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(1.5)
+    
+    logger.info(f"✅ [Step 2-1] yfinance 데이터 수집 완료: {len(results)}개 결과")
 
-    # 유효 데이터 필터링
+    # None 제거 및 시가총액 없는 항목 제거
     valid_items: List[Dict[str, Any]] = [
-        r for r in detailed_results
+        r for r in results
         if r is not None and r.get("market_cap_usd") is not None
     ]
-
+    
+    # 결과 분석
+    none_count = sum(1 for r in results if r is None)
+    no_market_cap_count = sum(1 for r in results if r is not None and r.get("market_cap_usd") is None)
+    
+    logger.info(f"📊 [Step 2-2] 결과 분석:")
+    logger.info(f"   - None 결과: {none_count}개")
+    logger.info(f"   - 시가총액 없음: {no_market_cap_count}개")
+    logger.info(f"   - 유효한 데이터: {len(valid_items)}개 (시가총액 정보 있음)")
+    
     if len(valid_items) == 0:
-        logger.error("❌ 상세 조회 결과가 없습니다. fast_info 스캔 결과도 활용할 수 없습니다.")
+        logger.error(f"❌ [Step 2-2] 오류: 유효한 데이터가 없습니다!")
+        logger.error(f"   - 수집된 티커: {len(tickers)}개")
+        logger.error(f"   - yfinance 결과: {len(results)}개")
+        logger.error(f"   - None 결과: {none_count}개")
+        logger.error(f"   - 시가총액 없는 결과: {no_market_cap_count}개")
+        
+        # 샘플 결과 확인
+        if results:
+            sample_results = [r for r in results if r is not None][:5]
+            logger.error(f"   샘플 결과 (최대 5개):")
+            for r in sample_results:
+                logger.error(f"     - {r.get('ticker', 'N/A')}: market_cap={r.get('market_cap')}, market_cap_usd={r.get('market_cap_usd')}")
+        
         return []
 
+    # 시가총액 기준 내림차순 정렬
     valid_items.sort(key=lambda x: x["market_cap_usd"] or 0.0, reverse=True)
-    top_100 = valid_items[:100]
 
+    # 상위 100개 선택
+    top_100 = valid_items[:100]
+    
     # 🚨 상위 100개 항목에 매핑된 국가 정보 추가
     country_matched = 0
     country_missing = []
@@ -1301,7 +1240,7 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
         else:
             country_missing.append(ticker)
     
-    logger.info(f"✅ [Step 2-3] 상위 100개 선정 완료 (fast_info 우선)")
+    logger.info(f"✅ [Step 2-3] 상위 100개 선정 완료")
     logger.info(f"   🔍 [디버깅] 국가 정보 매칭: {country_matched}/{len(top_100)}개")
     if country_missing:
         logger.warning(f"   ⚠️  국가 정보 없는 티커 ({len(country_missing)}개): {', '.join(country_missing[:10])}" + (f" ... (총 {len(country_missing)}개)" if len(country_missing) > 10 else ""))
@@ -1314,6 +1253,7 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
             usd_val = item.get("market_cap_usd") or 0
             local_val = item.get("market_cap_local")
             currency = item.get("currency") or "USD"
+            # 억 단위로 표현 (billions)
             usd_b = usd_val / 1_000_000_000
             if local_val is not None and currency:
                 return f"{name}: ${usd_b:,.1f}B (Original: {local_val:,.0f} {currency})"

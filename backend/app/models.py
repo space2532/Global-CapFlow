@@ -24,6 +24,7 @@ class Company(SQLModel, table=True):
     industry: Optional[str] = Field(default=None, max_length=128)
     country: Optional[str] = Field(default=None, max_length=128)
     currency: Optional[str] = Field(default=None, max_length=32)
+    logo_url: Optional[str] = Field(default=None, max_length=512, description="기업 로고 이미지 URL (FMP API)")
 
     # Relationship 복구: from __future__ import annotations 제거로 타입 힌트가 즉시 평가되어 SQLModel이 관계를 올바르게 파싱
     financials: List["Financial"] = Relationship(back_populates="company", sa_relationship_kwargs={"lazy": "selectin"})

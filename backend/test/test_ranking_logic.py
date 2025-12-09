@@ -89,3 +89,7 @@ async def test_calculate_ranking_changes_without_history(async_session: AsyncSes
     assert changes["sector_stats"]["Unknown"] == 1
     assert changes["previous_ranking_date"] is None
 
+
+
+
+

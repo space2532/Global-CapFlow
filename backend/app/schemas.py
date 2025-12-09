@@ -11,6 +11,7 @@ class CompanyBase(BaseModel):
     industry: str | None = None
     country: str | None = None
     currency: str | None = None
+    logo_url: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -1,7 +1,5 @@
 import asyncio
 import io
-import logging
-import random
 from datetime import datetime, date, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from io import StringIO
@@ -14,10 +12,10 @@ from requests_cache import CachedSession
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import models
-from ..config import settings
+from app import models
+from app.config import settings
 from services import news_service, stock_service
-from .ai_service import ai_client
+from services.ai_service import ai_client
 
 # 환율 캐시 (통화 → USD 환산율)
 EXCHANGE_RATE_CACHE: Dict[str, float] = {}
@@ -1012,102 +1010,68 @@ async def fetch_index_tickers() -> Dict[str, str]:
 
 
 async def _fetch_single_ticker_yf(ticker: str) -> Optional[Dict[str, Any]]:
-    """yfinance로 단일 티커의 시가총액 / 가격 / 회사 정보 조회.
+    """yfinance로 단일 티커의 시가총액 / 가격 / 회사 정보 조회. (국가 정보 수집 로직 제거)"""
 
-    전략:
-    1) fast_info 우선 사용 (가벼움)
-    2) fast_info 실패 시에만 .info + 백오프 재시도
-    """
-    logger = logging.getLogger(__name__)
+    def _sync_job() -> Optional[Dict[str, Any]]:
+        import logging
+        import random
+        import time
 
-    async def _fetch_fast_info() -> Optional[Dict[str, Any]]:
-        def _sync_fetch_fast() -> Optional[Dict[str, Any]]:
-            t = yf.Ticker(ticker)
-            fi = getattr(t, "fast_info", None)
-            if not fi:
-                return None
+        logger = logging.getLogger(__name__)
+        max_attempts = 3
+        last_error: Optional[Exception] = None
 
-            market_cap_fast = getattr(fi, "market_cap", None)
-            if market_cap_fast is None:
-                return None  # market_cap 없으면 Fallback 진행
-
-            return {
-                "marketCap": market_cap_fast,
-                "currentPrice": getattr(fi, "last_price", None),
-                "currency": getattr(fi, "currency", None),
-                "volume": getattr(fi, "last_volume", None),
-                # fast_info에는 상세 정보가 없을 수 있으니 기본값 지정
-                "longName": ticker,
-                "shortName": ticker,
-                "sector": None,
-                "industry": None,
-            }
-
-        return await asyncio.to_thread(_sync_fetch_fast)
-
-    async def _get_info_with_retry(max_retries: int = 3) -> Optional[Dict[str, Any]]:
-        for attempt in range(max_retries):
+        for attempt in range(1, max_attempts + 1):
+            info: Dict[str, Any] = {}
             try:
-                def _sync_fetch_info() -> Dict[str, Any]:
-                    t = yf.Ticker(ticker)
-                    return t.info or {}
-
-                info = await asyncio.to_thread(_sync_fetch_info)
-                market_cap = info.get("marketCap")
-                price = info.get("currentPrice") or info.get("regularMarketPrice")
-                if market_cap is None and price is None:
-                    raise ValueError("Empty data from yfinance")
-                return info
-
+                t = yf.Ticker(ticker)
+                info = t.info or {}
             except Exception as e:
-                is_last = attempt == max_retries - 1
-                err_lower = str(e).lower()
+                last_error = e
+                logger.warning(
+                    f"[yf] {ticker} info fetch failed (try {attempt}/{max_attempts}): "
+                    f"{type(e).__name__}: {str(e)[:150]}"
+                )
 
-                if "rate limit" in err_lower or "too many requests" in err_lower or "429" in err_lower:
-                    wait_time = 10 + (attempt * 10)  # 10s -> 20s -> 30s
-                    if not is_last:
-                        logger.warning(f"⛔ [Rate Limit] {ticker}: {wait_time}s 대기 후 재시도 ({attempt + 1}/{max_retries})")
-                else:
-                    wait_time = min(5, (2 ** attempt) + random.uniform(0, 1))
-                    if not is_last:
-                        logger.warning(
-                            f"⚠️ [Retry] {ticker}: {wait_time:.1f}s 후 재시도 ({attempt + 1}/{max_retries}) - {type(e).__name__}: {e}"
-                        )
+            market_cap = info.get("marketCap")
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
 
-                if is_last:
-                    logger.error(f"❌ {ticker} 최종 실패: {type(e).__name__}: {e}")
-                    return None
+            if market_cap is not None or price is not None:
+                data: Dict[str, Any] = {
+                    "ticker": ticker,
+                    "name": info.get("longName") or info.get("shortName") or ticker,
+                    "sector": info.get("sector"),
+                    "industry": info.get("industry"),
+                    "currency": info.get("currency"),
+                    # 현지통화 기준 시가총액 (원본)
+                    "market_cap_local": float(market_cap) if market_cap is not None else None,
+                    "price": float(price) if price is not None else None,
+                    "volume": info.get("volume"),
+                }
+                # market_cap는 하위 호환성을 위해 유지
+                data["market_cap"] = data["market_cap_local"]
+                return data
 
-                await asyncio.sleep(wait_time)
+            if attempt < max_attempts:
+                delay = random.uniform(1, 2)
+                logger.warning(
+                    f"[yf] {ticker} missing marketCap/price (try {attempt}/{max_attempts}); "
+                    f"retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
 
+        if last_error:
+            logger.warning(
+                f"[yf] {ticker} failed after {max_attempts} tries: "
+                f"{type(last_error).__name__}: {str(last_error)[:150]}"
+            )
+        else:
+            logger.warning(f"[yf] {ticker} missing marketCap/price after {max_attempts} tries")
         return None
 
-    # 1) Fast path
-    info = await _fetch_fast_info()
-
-    # 2) Fallback to .info with backoff
-    if not info:
-        info = await _get_info_with_retry()
-
-    if not info:
+    data = await asyncio.to_thread(_sync_job)
+    if data is None:
         return None
-
-    market_cap = info.get("marketCap")
-    price = info.get("currentPrice") or info.get("regularMarketPrice")
-
-    data: Dict[str, Any] = {
-        "ticker": ticker,
-        "name": info.get("longName") or info.get("shortName") or ticker,
-        "sector": info.get("sector") or "Unknown",
-        "industry": info.get("industry") or "Unknown",
-        "currency": info.get("currency"),
-        "market_cap_local": float(market_cap) if market_cap is not None else None,
-        "price": float(price) if price is not None else None,
-        "volume": info.get("volume"),
-    }
-
-    # market_cap는 하위 호환성을 위해 유지
-    data["market_cap"] = data["market_cap_local"]
 
     market_cap_local = data.get("market_cap_local")
     currency = data.get("currency") or "USD"
@@ -1185,30 +1149,36 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
     logger = logging.getLogger(__name__)
     
     tickers = list(tickers_map.keys())
+    total_tickers = len(tickers)
     
-    logger.info(f"📊 [Step 2] 데이터 수집 시작: {len(tickers)}개 티커에 대해 fast_info 기반 1차 스캔 후 상위 100개 선정")
-    logger.info(f"   (1차 fast_info 스캔 → Top100 확정 → Top100만 상세 조회, 배치 간 3.0초 대기)")
+    logger.info(f"📊 [Step 2] 데이터 수집 시작: {total_tickers}개 티커 스캔")
+    logger.info(f"   전략: fast_info 우선 스캔 (배치 처리) → Top 100 상세 조회")
 
     async def _fetch_fast_marketcap(ticker: str) -> Optional[Dict[str, Any]]:
         def _sync_fast() -> Optional[Dict[str, Any]]:
-            t = yf.Ticker(ticker)
-            fi = getattr(t, "fast_info", None)
-            if not fi:
-                return None
-            mc = getattr(fi, "market_cap", None)
-            if mc is None:
-                return None
-            return {
-                "ticker": ticker,
-                "market_cap_local": float(mc),
-                "price": getattr(fi, "last_price", None),
-                "currency": getattr(fi, "currency", None),
-                "volume": getattr(fi, "last_volume", None),
-                "name": ticker,
-                "sector": None,
-                "industry": None,
-            }
+            try:
+                t = yf.Ticker(ticker)
+                fi = getattr(t, "fast_info", None)
+                if not fi:
+                    return None
+                mc = getattr(fi, "market_cap", None)
+                if mc is None:
+                    return None
+                return {
+                    "ticker": ticker,
+                    "market_cap_local": float(mc),
+                    "price": getattr(fi, "last_price", None),
+                    "currency": getattr(fi, "currency", None),
+                    "volume": getattr(fi, "last_volume", None),
+                    "name": ticker,
+                    "sector": None,
+                    "industry": None,
+                }
+            except Exception as e:
+                logger.warning(f"⚠️ {ticker} fast_info 실패: {e}")
+                raise
 
+        # fast_info도 네트워크 요청이므로 비동기로 실행
         fast = await asyncio.to_thread(_sync_fast)
         if not fast:
             return None
@@ -1219,49 +1189,68 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
         fast["market_cap"] = fast["market_cap_local"]
         return fast
 
-    # 1차: fast_info만으로 전체 스캔
-    fast_tasks = [asyncio.create_task(_fetch_fast_marketcap(t)) for t in tickers]
-    fast_results = await asyncio.gather(*fast_tasks, return_exceptions=True)
-
+    # ---------------------------------------------------------
+    # [수정됨] 1차: fast_info 스캔에도 배치 처리 적용 (과부하 방지)
+    # ---------------------------------------------------------
     fast_valid: List[Dict[str, Any]] = []
     fast_map: Dict[str, Dict[str, Any]] = {}
-    for ticker_val, result in zip(tickers, fast_results):
-        if isinstance(result, Exception):
-            logger.debug(f"   fast_info 실패 ({ticker_val}): {type(result).__name__}: {str(result)[:100]}")
-            continue
-        if result and result.get("market_cap_usd") is not None:
-            fast_valid.append(result)
-            fast_map[ticker_val] = result
+    failed_fast_scan_tickers: List[str] = []
+    
+    # 한 번에 50개씩 스캔
+    SCAN_BATCH_SIZE = 50
+    
+    for i in range(0, total_tickers, SCAN_BATCH_SIZE):
+        batch_tickers = tickers[i : i + SCAN_BATCH_SIZE]
+        logger.info(f"   🔍 1차 스캔 배치: {i+1}~{min(i+SCAN_BATCH_SIZE, total_tickers)}/{total_tickers}")
+        
+        tasks = [asyncio.create_task(_fetch_fast_marketcap(t)) for t in batch_tickers]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for idx, res in enumerate(results):
+            if isinstance(res, Exception):
+                failed_fast_scan_tickers.append(batch_tickers[idx])
+                continue
+            if res and res.get("market_cap_usd") is not None:
+                fast_valid.append(res)
+                fast_map[res["ticker"]] = res
+        
+        # 배치 간 짧은 대기 (서버 부하 완화)
+        if i + SCAN_BATCH_SIZE < total_tickers:
+            await asyncio.sleep(1.0)
 
     if not fast_valid:
         logger.error("❌ fast_info 기반 스캔 실패: 유효한 시가총액 데이터를 찾지 못했습니다.")
         return []
 
+    # 시가총액 내림차순 정렬
     fast_valid.sort(key=lambda x: x["market_cap_usd"] or 0.0, reverse=True)
     top_fast = fast_valid[:100]
     top_fast_tickers = [item["ticker"] for item in top_fast]
 
-    logger.info(f"✅ 1차 fast_info 스캔 완료: 유효 {len(fast_valid)}개, Top100 확정")
-    logger.debug(f"   Top3(fast): {[item['ticker'] for item in top_fast[:3]]}")
+    logger.info(f"✅ 1차 스캔 완료: 유효 {len(fast_valid)}개 중 상위 100개 선정")
 
+    # ---------------------------------------------------------
     # 2차: Top 100만 상세 조회 (필요 시 .info Fallback)
-    BATCH_SIZE = 20
+    # ---------------------------------------------------------
+    DETAIL_BATCH_SIZE = 10  # 상세 조회는 더 조심스럽게 (10개씩)
     detailed_results: List[Optional[Dict[str, Any]]] = []
-    total = len(top_fast_tickers)
+    
+    detail_candidates = top_fast_tickers + [
+        t for t in failed_fast_scan_tickers if t not in top_fast_tickers
+    ]
 
-    for batch_start in range(0, total, BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, total)
-        batch_tickers = top_fast_tickers[batch_start:batch_end]
+    for batch_start in range(0, len(detail_candidates), DETAIL_BATCH_SIZE):
+        batch_end = min(batch_start + DETAIL_BATCH_SIZE, len(detail_candidates))
+        batch_tickers = detail_candidates[batch_start:batch_end]
 
-        logger.info(f"   상세 배치 처리: {batch_start + 1}~{batch_end}/{total}")
+        logger.info(f"   📝 상세 정보 수집: {batch_start + 1}~{batch_end}/{len(detail_candidates)}")
 
         async def _fetch_with_fallback(ticker: str):
             try:
+                # 상세 정보(.info) 시도 -> 실패 시 fast_info 데이터 사용 (순위 유지 목적)
                 detailed = await _fetch_single_ticker_yf(ticker)
-                # 상세 실패 시 fast_info 결과라도 반환하여 순위 유지
                 return detailed or fast_map.get(ticker)
             except Exception as e:
-                logger.debug(f"   상세 조회 실패 ({ticker}): {type(e).__name__}: {str(e)[:100]}")
                 return fast_map.get(ticker)
 
         batch_tasks = [asyncio.create_task(_fetch_with_fallback(t)) for t in batch_tickers]
@@ -1269,12 +1258,12 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
 
         for idx, res in enumerate(batch_results):
             if isinstance(res, Exception):
-                logger.debug(f"   상세 예외 ({batch_tickers[idx]}): {type(res).__name__}: {str(res)[:100]}")
                 res = fast_map.get(batch_tickers[idx])
             detailed_results.append(res)
 
-        if batch_end < total:
-            await asyncio.sleep(3.0)
+        # 상세 조회 배치 간 대기 (Rate Limit 방지)
+        if batch_end < len(top_fast_tickers):
+            await asyncio.sleep(2.0)
 
     # 유효 데이터 필터링
     valid_items: List[Dict[str, Any]] = [
@@ -1282,120 +1271,52 @@ async def fetch_top_100_data(tickers_map: Dict[str, str]) -> List[Dict[str, Any]
         if r is not None and r.get("market_cap_usd") is not None
     ]
 
-    if len(valid_items) == 0:
-        logger.error("❌ 상세 조회 결과가 없습니다. fast_info 스캔 결과도 활용할 수 없습니다.")
-        return []
-
     valid_items.sort(key=lambda x: x["market_cap_usd"] or 0.0, reverse=True)
     top_100 = valid_items[:100]
 
-    # 🚨 상위 100개 항목에 매핑된 국가 정보 추가
-    country_matched = 0
-    country_missing = []
+    # 국가 정보 매핑
+    country_count = 0
     for item in top_100:
         ticker = item["ticker"]
         country = tickers_map.get(ticker)
-        item["country"] = country
         if country:
-            country_matched += 1
-        else:
-            country_missing.append(ticker)
+            item["country"] = country
+            country_count += 1
     
-    logger.info(f"✅ [Step 2-3] 상위 100개 선정 완료 (fast_info 우선)")
-    logger.info(f"   🔍 [디버깅] 국가 정보 매칭: {country_matched}/{len(top_100)}개")
-    if country_missing:
-        logger.warning(f"   ⚠️  국가 정보 없는 티커 ({len(country_missing)}개): {', '.join(country_missing[:10])}" + (f" ... (총 {len(country_missing)}개)" if len(country_missing) > 10 else ""))
-    # tickers_map 샘플 확인
-    sample_tickers_map = list(tickers_map.items())[:5]
-    logger.debug(f"   🔍 [디버깅] tickers_map 샘플: {sample_tickers_map}")
+    # ---------------------------------------------------------
+    # 3차: 로고 수집 (FMP)
+    # ---------------------------------------------------------
     if top_100:
-        def _fmt_company(item: Dict[str, Any]) -> str:
-            name = item.get("name") or item["ticker"]
-            usd_val = item.get("market_cap_usd") or 0
-            local_val = item.get("market_cap_local")
-            currency = item.get("currency") or "USD"
-            usd_b = usd_val / 1_000_000_000
-            if local_val is not None and currency:
-                return f"{name}: ${usd_b:,.1f}B (Original: {local_val:,.0f} {currency})"
-            return f"{name}: ${usd_b:,.1f}B"
-
-        top_samples = ", ".join(_fmt_company(item) for item in top_100[:3])
-        logger.info(f"   상위 3개: {top_samples}")
-    
-    # 상위 100개에 대해서만 로고 수집 (배치 처리)
-    # 전략: FMP Direct URL Strategy (FMP Image API)
-    if top_100:
-        logger.info(f"🖼️  [Step 3] 로고 수집 시작: {len(top_100)}개 기업에 대해 로고 수집 중...")
-        logger.info(f"   전략: FMP Direct URL Strategy (FMP Image API)")
-        logger.info(f"   (배치 처리: {len(top_100)}개 기업을 10개씩 처리, 배치 간 0.2초 대기)")
+        logger.info(f"🖼️  [Step 3] 로고 수집 시작 ({len(top_100)}개)")
         
-        # 배치 처리 설정
         LOGO_BATCH_SIZE = 10
         logo_results = []
         
-        # 배치 단위로 처리
         for batch_start in range(0, len(top_100), LOGO_BATCH_SIZE):
             batch_end = min(batch_start + LOGO_BATCH_SIZE, len(top_100))
             batch_items = top_100[batch_start:batch_end]
             
-            logger.info(f"   로고 수집 배치: {batch_start + 1}~{batch_end}/{len(top_100)} ({batch_end*100//len(top_100)}%)")
-            
-            # 배치 내에서 병렬 처리
-            async def _fetch_logo_with_exception_handling(item: Dict[str, Any]):
-                try:
-                    ticker = item["ticker"]
-                    company_name = item.get("name")
-                    return await _fetch_company_logo_fmp(ticker, company_name)
-                except Exception as e:
-                    logger.debug(f"   로고 수집 실패 ({item.get('ticker', 'unknown')}): {type(e).__name__}: {str(e)[:100]}")
-                    return None
-            
-            batch_tasks = [
-                asyncio.create_task(_fetch_logo_with_exception_handling(item))
+            # 병렬 처리
+            tasks = [
+                asyncio.create_task(_fetch_company_logo_fmp(item["ticker"], item.get("name")))
                 for item in batch_items
             ]
-            batch_logo_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # 예외를 None으로 변환
-            for i, result in enumerate(batch_logo_results):
-                if isinstance(result, Exception):
-                    logger.debug(f"   로고 수집 예외 ({batch_items[i]['ticker']}): {type(result).__name__}: {str(result)[:100]}")
-                    batch_logo_results[i] = None
+            for res in results:
+                if isinstance(res, Exception):
+                    logo_results.append(None)
+                else:
+                    logo_results.append(res)
             
-            logo_results.extend(batch_logo_results)
-            
-            # 마지막 배치가 아니면 대기
             if batch_end < len(top_100):
                 await asyncio.sleep(0.2)
         
-        # 로고 URL을 각 항목에 추가
-        logo_count = 0
-        error_count = 0
-        for item, logo_result in zip(top_100, logo_results):
-            if logo_result is None:
-                item["logo_url"] = None
-                error_count += 1
-            else:
-                item["logo_url"] = logo_result
-                if logo_result:
-                    logo_count += 1
-        
-        logger.info(f"✅ [Step 3] 로고 수집 완료: {logo_count}/{len(top_100)}개 기업의 로고 수집됨")
-        if error_count > 0:
-            logger.warning(f"   ⚠️  로고 수집 오류: {error_count}개")
-        # 로고 수집 결과 샘플 확인
-        logo_samples = [(item["ticker"], item.get("logo_url") is not None) for item in top_100[:5]]
-        logger.debug(f"   🔍 [디버깅] 로고 수집 샘플: {logo_samples}")
-    else:
-        # top_100이 비어있는 경우
-        logger.warning(f"⚠️  [Step 3] 로고 수집 건너뜀: 상위 100개 기업 데이터 없음")
-    
-    # 수집 완료 후 최종 데이터 샘플 확인
-    logger.debug(f"🔍 [디버깅] 최종 top_100 샘플 (상위 5개):")
-    for i, item in enumerate(top_100[:5], 1):
-        logger.debug(f"   {i}. {item['ticker']}: country={item.get('country')}, logo_url={'있음' if item.get('logo_url') else '없음'}")
-    
-    logger.info(f"✅ [Step 2] 전체 데이터 수집 완료: {len(top_100)}개 기업")
+        # 결과 매핑
+        for item, logo_url in zip(top_100, logo_results):
+            item["logo_url"] = logo_url
+
+    logger.info(f"✅ [Step 2] 데이터 수집 완료: 최종 {len(top_100)}개")
     return top_100
 
 
@@ -1561,198 +1482,149 @@ async def _calculate_ranking_changes(
 
 async def collect_and_update_global_top_100(db: AsyncSession, limit: int = None) -> Dict[str, Any]:
     """
-    엔드투엔드 파이프라인:
-    - 주요 지수 구성 종목 티커 수집
-    - yfinance로 시가총액 상위 100개 선정
-    - DB에 companies / rankings 업데이트 (과거 데이터 보존)
-    - 변동 데이터 계산 후 함께 반환
-    
-    Args:
-        db: 데이터베이스 세션
-        limit: 테스트용 티커 개수 제한 (None이면 전체 처리)
+    글로벌 상위 100개 기업 수집 및 DB 업데이트 (Company, Ranking, Price)
     """
     import logging
     logger = logging.getLogger(__name__)
     
     logger.info("="*70)
     logger.info("🚀 [글로벌 상위 100개 기업 재조사] 시작")
-    if limit:
-        logger.info(f"   ⚠️  테스트 모드: {limit}개 티커만 처리")
-    logger.info("="*70)
     
+    # 1. 티커 수집
     tickers_map = await fetch_index_tickers()
     tickers = list(tickers_map.keys())
     
-    if not tickers:
-        logger.error("❌ [글로벌 상위 100개 기업 재조사] 실패: 티커 수집 실패!")
-        ranking_date = datetime.now(timezone.utc).date()
-        return {
-            "top_100": [],
-            "ranking_date": ranking_date,
-            "changes": {},
-        }
-    
-    # limit이 제공되면 티커 목록을 해당 개수만큼 잘라서 처리
     if limit and limit > 0:
         tickers = tickers[:limit]
-        # tickers_map도 제한된 티커만 포함하도록 필터링
-        tickers_map = {ticker: tickers_map[ticker] for ticker in tickers if ticker in tickers_map}
-        logger.info(f"   📋 티커 목록 제한: {len(tickers)}개로 제한됨 (원본: {len(list(tickers_map.keys()))}개)")
-    
+        tickers_map = {t: tickers_map[t] for t in tickers if t in tickers_map}
+        logger.info(f"   ⚠️ 테스트 모드: {limit}개 티커만 처리")
+
+    if not tickers:
+        logger.error("❌ 티커 수집 실패")
+        return {"top_100": [], "ranking_date": datetime.now(timezone.utc).date(), "changes": {}}
+
+    # 2. 데이터 수집 (yfinance + FMP logo)
     top_100 = await fetch_top_100_data(tickers_map)
     ranking_date = datetime.now(timezone.utc).date()
     
     if not top_100:
-        logger.error("❌ [글로벌 상위 100개 기업 재조사] 실패: 수집된 기업이 없습니다!")
-        logger.error(f"   - 수집된 티커: {len(tickers)}개")
-        logger.error(f"   - 상위 100개 선정 실패: yfinance에서 유효한 데이터를 가져오지 못했습니다.")
-        return {
-            "top_100": [],
-            "ranking_date": ranking_date,
-            "changes": {},
-        }
-    
-    logger.info(f"💾 [Step 4] DB 저장 시작: {len(top_100)}개 기업 정보 저장 중...")
-    
-    # 변동 데이터 계산 (기존 데이터는 유지)
-    logger.info(f"📊 [Step 4-1] 변동 데이터 계산 중...")
+        logger.error("❌ 데이터 수집 실패 (결과 없음)")
+        return {"top_100": [], "ranking_date": ranking_date, "changes": {}}
+
+    # 3. 변동 데이터 계산
+    logger.info(f"📊 [Step 4-1] 랭킹 변동 계산 중...")
     changes = await _calculate_ranking_changes(db, top_100, ranking_date)
-    logger.info(f"   신규 진입: {len(changes.get('new_entries', []))}개, 퇴출: {len(changes.get('exited', []))}개")
 
-    # Rankings만 업데이트 (년별 상위 100개 기업 재조사)
-    current_year = ranking_date.year
-    tickers_list = [item["ticker"] for item in top_100]
+    # 4. DB 저장 시작
+    logger.info(f"💾 [Step 4] DB 저장 트랜잭션 시작 (기업: {len(top_100)}개)")
     
-    # Company 정보 업데이트
-    logger.info(f"💾 [Step 4-2] Company 정보 업데이트 중...")
-    stmt = select(models.Company).where(models.Company.ticker.in_(tickers_list))
-    result = await db.execute(stmt)
-    existing_companies = {c.ticker: c for c in result.scalars().all()}
-    
-    # 저장 전 데이터 통계
-    items_with_country = sum(1 for item in top_100 if item.get("country"))
-    items_with_logo = sum(1 for item in top_100 if item.get("logo_url"))
-    logger.info(f"   🔍 [디버깅] 저장 전 통계: 국가 정보 {items_with_country}/{len(top_100)}개, 로고 URL {items_with_logo}/{len(top_100)}개")
-    
-    updated_count = 0
-    created_count = 0
-    country_count = 0
-    logo_count = 0
-    country_update_skipped = 0  # None이어서 업데이트 건너뛴 경우
-    logo_update_skipped = 0  # None이어서 업데이트 건너뛴 경우
-    
-    for item in top_100:
-        ticker = item["ticker"]
-        if ticker in existing_companies:
-            company = existing_companies[ticker]
-            company.name = item.get("name") or company.name
-            company.sector = item.get("sector") or company.sector
-            company.industry = item.get("industry") or company.industry
-            # country 업데이트: item에 country가 있고 None이 아닐 때만 업데이트 (기존 값 보존)
-            if "country" in item and item.get("country") is not None:
-                company.country = item.get("country")
-                country_count += 1
-            elif "country" in item and item.get("country") is None:
-                country_update_skipped += 1
-            company.currency = item.get("currency") or company.currency
-            # 로고 URL 업데이트: item에 logo_url이 있고 None이 아닐 때만 업데이트 (기존 값 보존)
-            if "logo_url" in item and item.get("logo_url") is not None:
-                company.logo_url = item.get("logo_url")
-                logo_count += 1
-            elif "logo_url" in item and item.get("logo_url") is None:
-                logo_update_skipped += 1
-            updated_count += 1
-        else:
-            company = models.Company(
-                ticker=ticker,
-                name=item.get("name") or ticker,
-                sector=item.get("sector"),
-                industry=item.get("industry"),
-                country=item.get("country"),
-                currency=item.get("currency"),
-                logo_url=item.get("logo_url"),
+    try:
+        current_year = ranking_date.year
+        tickers_list = [item["ticker"] for item in top_100]
+
+        # [4-2] Company Update
+        stmt = select(models.Company).where(models.Company.ticker.in_(tickers_list))
+        result = await db.execute(stmt)
+        existing_companies = {c.ticker: c for c in result.scalars().all()}
+        
+        for item in top_100:
+            ticker = item["ticker"]
+            if ticker in existing_companies:
+                c = existing_companies[ticker]
+                c.name = item.get("name") or c.name
+                c.sector = item.get("sector") or c.sector
+                c.industry = item.get("industry") or c.industry
+                c.currency = item.get("currency") or c.currency
+                if item.get("country"): c.country = item.get("country")
+                if item.get("logo_url"): c.logo_url = item.get("logo_url")
+            else:
+                new_c = models.Company(
+                    ticker=ticker,
+                    name=item.get("name") or ticker,
+                    sector=item.get("sector"),
+                    industry=item.get("industry"),
+                    country=item.get("country"),
+                    currency=item.get("currency"),
+                    logo_url=item.get("logo_url"),
+                )
+                db.add(new_c)
+        
+        # [4-3] Rankings Update (Delete & Insert)
+        logger.info(f"💾 [Step 4-3] Rankings 업데이트 (Date: {ranking_date})")
+        await db.execute(delete(models.Ranking).where(models.Ranking.ranking_date == ranking_date))
+        
+        for rank, item in enumerate(top_100, start=1):
+            ranking = models.Ranking(
+                year=current_year,
+                ranking_date=ranking_date,
+                rank=rank,
+                ticker=item["ticker"],
+                market_cap=item.get("market_cap_usd"),
+                company_name=item.get("name") or item["ticker"],
             )
-            if item.get("country"):
-                country_count += 1
-            if item.get("logo_url"):
-                logo_count += 1
-            db.add(company)
-            created_count += 1
+            db.add(ranking)
 
-    logger.info(f"   Company 업데이트: {updated_count}개, 신규 생성: {created_count}개")
-    logger.info(f"   국가 정보: {country_count}개 저장됨 (None으로 건너뛴 경우: {country_update_skipped}개)")
-    logger.info(f"   로고 URL: {logo_count}개 저장됨 (None으로 건너뛴 경우: {logo_update_skipped}개)")
-    
-    # 저장된 데이터 샘플 확인 (상위 5개)
-    logger.debug(f"   🔍 [디버깅] 저장된 Company 데이터 샘플 (상위 5개):")
-    sample_tickers = tickers_list[:5]
-    for ticker in sample_tickers:
-        if ticker in existing_companies:
-            company = existing_companies[ticker]
-            logger.debug(f"     {ticker}: country={company.country}, logo_url={'있음' if company.logo_url else '없음'}")
-        else:
-            # 신규 생성된 경우 DB에서 조회 필요 (커밋 후 확인)
-            pass
-    
-    # Rankings: 기존 데이터 삭제 (재실행 시 중복 방지)
-    logger.info(f"💾 [Step 4-3] Rankings 업데이트 중...")
-    await db.execute(delete(models.Ranking).where(models.Ranking.ranking_date == ranking_date))
+        # [4-4] Prices Update (Upsert)
+        logger.info(f"💾 [Step 4-4] Prices 업데이트 (Date: {ranking_date})")
+        price_datetime = datetime(ranking_date.year, ranking_date.month, ranking_date.day, tzinfo=timezone.utc)
+        
+        # 일괄 처리를 위해 기존 데이터 로드 (성능 최적화)
+        price_stmt = select(models.Price).where(
+            models.Price.ticker.in_(tickers_list),
+            models.Price.date == price_datetime
+        )
+        price_result = await db.execute(price_stmt)
+        existing_prices = {p.ticker: p for p in price_result.scalars().all()}
+        
+        prices_added = 0
+        prices_updated = 0
+        
+        for item in top_100:
+            ticker = item["ticker"]
+            if ticker in existing_prices:
+                p = existing_prices[ticker]
+                p.close = item.get("price")
+                p.market_cap = item.get("market_cap_usd")
+                p.volume = item.get("volume")
+                prices_updated += 1
+            else:
+                new_p = models.Price(
+                    ticker=ticker,
+                    date=price_datetime,
+                    close=item.get("price"),
+                    market_cap=item.get("market_cap_usd"),
+                    volume=item.get("volume")
+                )
+                db.add(new_p)
+                prices_added += 1
+        
+        logger.info(f"   Prices 결과: 신규 {prices_added}개, 업데이트 {prices_updated}개")
 
-    # Rankings: 오늘 날짜(ranking_date)로 신규 삽입
-    for rank, item in enumerate(top_100, start=1):
-        ranking = models.Ranking(
-            year=current_year,
-            ranking_date=ranking_date,
-            rank=rank,
-            ticker=item["ticker"],
-            market_cap=item.get("market_cap_usd"),
-            company_name=item.get("name") or item["ticker"],
-        )
-        db.add(ranking)
-    
-    logger.info(f"💾 [Step 4-4] DB 커밋 중...")
-    await db.commit()
-    
-    # 커밋 후 실제 DB에 저장된 값 확인 (샘플)
-    logger.debug(f"   🔍 [디버깅] 커밋 후 DB 확인 (샘플 5개):")
-    sample_check_stmt = select(models.Company).where(models.Company.ticker.in_(tickers_list[:5]))
-    sample_result = await db.execute(sample_check_stmt)
-    sample_companies = sample_result.scalars().all()
-    for company in sample_companies:
-        logger.debug(f"     {company.ticker}: country={company.country}, logo_url={'있음' if company.logo_url else '없음'}")
-    
-    # 섹터 트렌드 AI 분석 및 저장
-    ai_trend_text = None
-    try:
-        logger.info(f"🤖 [Step 4-5] 섹터 트렌드 AI 분석 생성 중...")
-        ai_trend_text = await ai_client.generate_sector_trend_analysis(changes)
-    except Exception as e:
-        logger.error(f"   섹터 트렌드 AI 생성 실패: {type(e).__name__}: {e}")
-    
-    try:
-        sector_trend = models.SectorTrend(
-            date=ranking_date,
-            dominant_sectors=changes.get("sector_stats"),
-            new_entries={
-                "new_entries": changes.get("new_entries", []),
-                "exited": changes.get("exited", []),
-            },
-            ai_analysis_text=ai_trend_text,
-        )
-        db.add(sector_trend)
+        # [4-5] 트랜잭션 커밋
         await db.commit()
-        logger.info("✅ [Step 4-5] 섹터 트렌드 분석 저장 완료")
+        logger.info("✅ [Step 4] DB 저장 완료!")
+
+        # [4-6] AI 트렌드 분석 (저장 후 실행)
+        try:
+            ai_trend_text = await ai_client.generate_sector_trend_analysis(changes)
+            sector_trend = models.SectorTrend(
+                date=ranking_date,
+                dominant_sectors=changes.get("sector_stats"),
+                new_entries={"new": changes.get("new_entries"), "exited": changes.get("exited")},
+                ai_analysis_text=ai_trend_text,
+            )
+            db.add(sector_trend)
+            await db.commit()
+            logger.info("✅ 섹터 트렌드 AI 분석 저장 완료")
+        except Exception as e:
+            logger.warning(f"⚠️ 섹터 트렌드 저장 실패: {e}")
+
     except Exception as e:
-        logger.error(f"❌ [Step 4-5] 섹터 트렌드 저장 실패: {type(e).__name__}: {e}")
+        logger.error(f"❌ DB 저장 중 치명적 오류: {e}")
         await db.rollback()
-    
-    logger.info("="*70)
-    logger.info(f"✅ [글로벌 상위 100개 기업 재조사] 완료!")
-    logger.info(f"   - 수집된 기업: {len(top_100)}개")
-    logger.info(f"   - 국가 정보: {country_count}개 저장됨 (건너뛴 경우: {country_update_skipped}개)")
-    logger.info(f"   - 로고 URL: {logo_count}개 저장됨 (건너뛴 경우: {logo_update_skipped}개)")
-    logger.info(f"   - 기준일: {ranking_date}")
-    logger.info("="*70)
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"top_100": [], "ranking_date": ranking_date, "changes": {}}
     
     return {
         "top_100": top_100,
