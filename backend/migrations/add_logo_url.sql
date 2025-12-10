@@ -18,3 +18,5 @@ SELECT 'Migration completed successfully! logo_url column added to companies tab
 
 
 
+
+

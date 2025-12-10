@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from typing import List
 
 from .. import models, schemas
@@ -24,16 +24,17 @@ async def get_rankings_by_year(
     - Relationship을 활용하여 Company 정보를 자동으로 로드합니다.
     """
     # Relationship을 활용하여 Company 정보를 함께 로드 (N+1 문제 방지)
+    # joinedload를 사용하여 LEFT JOIN으로 Company 정보를 함께 가져옴
     stmt = (
         select(models.Ranking)
-        .options(selectinload(models.Ranking.company))
+        .options(joinedload(models.Ranking.company))
         .where(models.Ranking.year == year)
         .order_by(models.Ranking.rank)
         .limit(limit)
     )
     
     result = await db.execute(stmt)
-    rankings = result.scalars().all()
+    rankings = result.scalars().unique().all()  # unique()를 사용하여 중복 제거
     
     if not rankings:
         raise HTTPException(
@@ -51,6 +52,8 @@ async def get_rankings_by_year(
             market_cap=ranking.market_cap,
             sector=ranking.company.sector if ranking.company else None,
             industry=ranking.company.industry if ranking.company else None,
+            logo_url=ranking.company.logo_url if ranking.company else None,
+            country=ranking.company.country if ranking.company else None,
         )
         for ranking in rankings
     ]
@@ -207,7 +210,7 @@ async def get_latest_movers(db: AsyncSession = Depends(get_db)):
 
     exited_list = [
         schemas.MoverItem(
-            rank=None,
+            rank=prev_map[t].rank,
             ticker=prev_map[t].ticker,
             name=prev_map[t].company.name if prev_map[t].company else prev_map[t].company_name,
             logo_url=prev_map[t].company.logo_url if prev_map[t].company else None,

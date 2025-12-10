@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, TrendingUp, TrendingDown, Activity, DollarSign, Building2, MapPin, Globe } from 'lucide-react';
+import { ArrowLeft, Activity, DollarSign, Building2, MapPin, Globe, FileText, ExternalLink } from 'lucide-react';
 import { Header } from './Header';
 import { CompanyDetail, PriceHistoryRead } from '../types';
 import { ApiError, fetchAndSaveCompany, getCompanyDetail, getPriceHistory } from '../services/api';
@@ -9,20 +9,31 @@ interface StockProfileProps {
   onBack?: () => void;
 }
 
-function getSentimentColor(score: number | null | undefined): { bg: string; text: string; barBg: string } {
-  if (!score && score !== 0) return { bg: 'bg-slate-700/40', text: 'text-slate-300', barBg: 'bg-slate-700' };
-  if (score >= 80) return { bg: 'bg-green-500/20', text: 'text-green-400', barBg: 'bg-green-500' };
-  if (score >= 60) return { bg: 'bg-blue-500/20', text: 'text-blue-400', barBg: 'bg-blue-500' };
-  if (score >= 40) return { bg: 'bg-yellow-500/20', text: 'text-yellow-400', barBg: 'bg-yellow-500' };
-  return { bg: 'bg-red-500/20', text: 'text-red-400', barBg: 'bg-red-500' };
-}
-
 function formatNumber(value: number | null | undefined) {
   if (value === null || value === undefined) return 'N/A';
   if (Math.abs(value) >= 1_000_000_000_000) return `${(value / 1_000_000_000_000).toFixed(2)}T`;
   if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
   return value.toLocaleString();
+}
+
+function LogoWithFallback({ logoUrl, ticker, name }: { logoUrl: string | null; ticker: string; name: string }) {
+  const [showFallback, setShowFallback] = useState(false);
+
+  return (
+    <div className="size-16 rounded-2xl bg-white flex items-center justify-center flex-shrink-0 overflow-hidden ring-2 ring-slate-700">
+      {!showFallback && logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={name}
+          className="size-14 object-contain"
+          onError={() => setShowFallback(true)}
+        />
+      ) : (
+        <span className="text-slate-700 text-lg font-semibold">{ticker}</span>
+      )}
+    </div>
+  );
 }
 
 export function StockProfilePage({ ticker, onBack }: StockProfileProps) {
@@ -86,8 +97,6 @@ export function StockProfilePage({ ticker, onBack }: StockProfileProps) {
     return prices[prices.length - 1];
   }, [prices]);
 
-  const sentimentColors = getSentimentColor(company?.latest_report?.sentiment_score ?? null);
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       {/* Sticky Header */}
@@ -124,20 +133,7 @@ export function StockProfilePage({ ticker, onBack }: StockProfileProps) {
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex items-start gap-4">
                 {/* Company Logo */}
-                <div className="size-16 rounded-2xl bg-white flex items-center justify-center flex-shrink-0 overflow-hidden ring-2 ring-slate-700">
-                  {company.logo_url ? (
-                    <img
-                      src={company.logo_url}
-                      alt={company.name}
-                      className="size-14 object-contain"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <span className="text-slate-700 text-lg font-semibold">{company.ticker}</span>
-                  )}
-                </div>
+                <LogoWithFallback logoUrl={company.logo_url} ticker={company.ticker} name={company.name} />
 
                 {/* Company Name & Ticker */}
                 <div className="flex-1">
@@ -203,69 +199,85 @@ export function StockProfilePage({ ticker, onBack }: StockProfileProps) {
               <h2 className="text-2xl text-slate-100">AI 투자 리포트</h2>
             </div>
 
-            {/* Sentiment Indicator */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-slate-300">투자 심리 분석</span>
-                <div className="flex items-center gap-2">
-                  <span className={`text-2xl ${sentimentColors.text}`}>
-                    {company?.latest_report?.sentiment_score ?? 'N/A'}
-                  </span>
-                  <span className={`px-3 py-1 ${sentimentColors.bg} ${sentimentColors.text} rounded-lg text-sm`}>
-                    {company?.latest_report ? 'AI 분석' : '데이터 없음'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Sentiment Bar */}
-              <div className="relative w-full h-3 bg-slate-800 rounded-full overflow-hidden">
-                <div
-                  className={`absolute left-0 top-0 h-full ${sentimentColors.barBg} rounded-full transition-all duration-1000 ease-out`}
-                  style={{ width: `${(company?.latest_report?.sentiment_score ?? 0)}%` }}
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent to-white/20"></div>
-                </div>
-              </div>
-            </div>
-
             {/* Summary Content */}
             <div className="space-y-4">
               <div>
                 <h3 className="text-lg text-slate-200 mb-3">종합 분석</h3>
                 <div className="text-slate-300 leading-relaxed whitespace-pre-line bg-slate-900/40 rounded-xl p-4 border border-slate-700/50 min-h-[120px]">
-                  {company?.latest_report?.summary_content || 'AI 리포트가 없습니다.'}
+                  {company?.latest_quarterly_report?.content || '리포트가 없습니다.'}
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Price History (simple list) */}
+        {/* 최신 뉴스 AI 요약 */}
         <div className="mb-8">
           <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl shadow-xl overflow-hidden">
-            <div className="p-6 border-b border-slate-700 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl text-slate-100">주가 히스토리</h2>
-                <p className="text-sm text-slate-400 mt-1">최근 수집된 주가/시총</p>
+            <div className="p-6 border-b border-slate-700">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 bg-slate-700/50 rounded-lg">
+                  <FileText className="size-5 text-slate-300" />
+                </div>
+                <div>
+                  <h2 className="text-2xl text-slate-100">최신 뉴스 AI 요약</h2>
+                  <p className="text-sm text-slate-400 mt-1">AI가 분석한 주요 뉴스 및 시장 동향</p>
+                </div>
               </div>
             </div>
-            <div className="p-6 space-y-3">
-              {prices.length === 0 ? (
-                <div className="text-slate-500 text-sm">주가 데이터가 없습니다.</div>
+            <div className="p-6 space-y-4">
+              {!company?.recent_news?.length ? (
+                <div className="text-slate-500 text-sm">최근 뉴스가 없습니다.</div>
               ) : (
-                prices.slice().reverse().map((p, idx) => (
-                  <div
-                    key={`${p.date}-${idx}`}
-                    className="flex items-center justify-between bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-3"
-                  >
-                    <div className="text-slate-200">{p.date.split('T')[0]}</div>
-                    <div className="flex items-center gap-4 text-sm text-slate-300">
-                      <span>종가: ${p.close ?? 'N/A'}</span>
-                      <span>시총: {formatNumber(p.market_cap)}</span>
-                      <span>거래량: {p.volume ? p.volume.toLocaleString() : 'N/A'}</span>
+                company.recent_news.map((news, idx) => {
+                  const sources = news.sources && news.sources.length > 0
+                    ? news.sources
+                    : [{ title: news.title, source: news.source, date: news.date, url: news.url }];
+
+                  return (
+                    <div key={`${news.url}-${idx}`} className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-slate-100 font-semibold text-lg">{news.title || 'AI 요약'}</h3>
+                          {news.summary && (
+                            <p className="text-slate-300 leading-relaxed mt-2">{news.summary}</p>
+                          )}
+                        </div>
+                        <div className="text-xs text-blue-300 bg-blue-900/30 border border-blue-700/50 rounded-full px-3 py-1">
+                          출처 {sources.length}개
+                        </div>
+                      </div>
+
+                      <details className="group bg-slate-800/40 rounded-lg border border-slate-800/80">
+                        <summary className="flex w-full cursor-pointer items-center justify-end px-4 py-2 list-none">
+                          <span className="ml-auto inline-flex items-center gap-2 text-sm text-slate-100 bg-slate-900/70 border border-slate-700 rounded-full px-3 py-1 hover:bg-slate-800 transition-colors">
+                            <span className="font-medium">출처 보기</span>
+                            <span className="text-slate-400 group-open:-rotate-180 transition-transform">v</span>
+                          </span>
+                        </summary>
+                        <div className="px-4 pb-4 pt-1 space-y-3">
+                          {sources.map((src, sIdx) => (
+                            <div key={`${src.url}-${sIdx}`} className="rounded-md bg-slate-900/60 border border-slate-800 p-3">
+                              <div className="text-slate-100 text-sm font-medium mb-1">{src.title || '제목 없음'}</div>
+                              <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
+                                <span>{src.date || '날짜 미상'}</span>
+                                <a
+                                  href={src.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-400 hover:text-blue-300 flex items-center gap-1.5 transition-colors"
+                                >
+                                  <span>출처: {src.source || '출처 미상'}</span>
+                                  <ExternalLink className="size-3.5" />
+                                </a>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

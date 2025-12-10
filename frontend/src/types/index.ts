@@ -41,9 +41,34 @@ export interface MarketReportRead {
   source_type: string;
 }
 
+export interface QuarterlyReportRead {
+  year: number;
+  quarter: number;
+  content: string | null;
+  created_at: string;
+}
+
+export interface NewsSource {
+  title: string;
+  source: string;
+  date: string;
+  url: string;
+}
+
+export interface NewsItem {
+  title: string;
+  source: string;
+  date: string;
+  url: string;
+  summary?: string | null;
+  sources?: NewsSource[];
+}
+
 export interface CompanyDetail extends CompanyRead {
   financials: FinancialRead[];
   latest_report: MarketReportRead | null;
+  latest_quarterly_report: QuarterlyReportRead | null;
+  recent_news: NewsItem[];
 }
 
 export interface MatchupRequest {
@@ -72,6 +97,8 @@ export interface RankingRead {
   market_cap: number | null;
   sector: string | null;
   industry: string | null;
+  logo_url: string | null;
+  country: string | null;
 }
 
 export interface PriceHistoryRead {

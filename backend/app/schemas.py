@@ -57,9 +57,39 @@ class MarketReportRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class NewsSource(BaseModel):
+    """개별 뉴스 출처 정보"""
+    title: str
+    source: str
+    date: str
+    url: str
+
+
+class NewsItem(BaseModel):
+    """뉴스 아이템 스키마 (중복 출처를 묶어 반환)"""
+    title: str
+    source: str
+    date: str
+    url: str
+    summary: str | None = None  # AI 요약 내용
+    sources: list[NewsSource] = []  # 동일 내용의 다른 출처 목록
+
+
+class QuarterlyReportRead(BaseModel):
+    """분기별 분석 리포트 조회 스키마"""
+    year: int
+    quarter: int
+    content: str | None = None
+    created_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class CompanyDetail(CompanyRead):
     financials: list[FinancialRead] = []
     latest_report: MarketReportRead | None = None
+    latest_quarterly_report: QuarterlyReportRead | None = None
+    recent_news: list[NewsItem] = []
 
 
 class MatchupRequest(BaseModel):
@@ -92,6 +122,8 @@ class RankingRead(BaseModel):
     market_cap: float | None = None
     sector: str | None = None
     industry: str | None = None
+    logo_url: str | None = None
+    country: str | None = None
 
     model_config = {"from_attributes": True}
 

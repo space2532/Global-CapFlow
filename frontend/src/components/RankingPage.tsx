@@ -1,8 +1,29 @@
+import React from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Award, TrendingDown, TrendingUp } from 'lucide-react';
+import { Award, TrendingDown, TrendingUp, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { Header } from './Header';
-import { getRankings } from '../services/api';
-import { RankingRead } from '../types';
+import { getRankingMovers, getRankings } from '../services/api';
+import { RankingMovers, RankingRead } from '../types';
+
+// Company Logo Component with fallback
+function CompanyLogo({ logoUrl, ticker, name }: { logoUrl: string | null; ticker: string; name: string }) {
+  const [showFallback, setShowFallback] = useState(false);
+
+  return (
+    <div className="size-12 rounded-full bg-white flex items-center justify-center flex-shrink-0 overflow-hidden ring-2 ring-slate-700 group-hover:ring-blue-500 transition-all">
+      {!showFallback && logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={name}
+          className="size-12 rounded-full object-contain"
+          onError={() => setShowFallback(true)}
+        />
+      ) : (
+        <span className="text-sm font-semibold text-slate-700">{ticker}</span>
+      )}
+    </div>
+  );
+}
 
 interface RankingPageProps {
   onViewProfile?: (ticker: string) => void;
@@ -32,10 +53,26 @@ function formatMarketCap(value: number | null) {
 export function RankingPage({ onViewProfile }: RankingPageProps) {
   const [selectedYear, setSelectedYear] = useState(2025);
   const [rankings, setRankings] = useState<RankingRead[]>([]);
+  const [movers, setMovers] = useState<RankingMovers | null>(null);
   const [loading, setLoading] = useState(false);
+  const [moversLoading, setMoversLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [moversError, setMoversError] = useState<string | null>(null);
 
   const years = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+  const TOP_LIMIT = 20;
+  const filteredNewEntries = useMemo(
+    () =>
+      movers?.new_entries.filter((item) => item.rank !== null && item.rank <= TOP_LIMIT) || [],
+    [movers]
+  );
+
+  const filteredExited = useMemo(
+    () =>
+      movers?.exited.filter((item) => item.rank !== null && item.rank <= TOP_LIMIT) || [],
+    [movers]
+  );
+
 
   useEffect(() => {
     let mounted = true;
@@ -56,6 +93,29 @@ export function RankingPage({ onViewProfile }: RankingPageProps) {
     };
   }, [selectedYear]);
 
+  useEffect(() => {
+    let mounted = true;
+    setMoversLoading(true);
+    setMoversError(null);
+
+    getRankingMovers()
+      .then((data) => {
+        if (!mounted) return;
+        setMovers(data);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setMoversError(err.message || '신규 진입/이탈 데이터를 불러오지 못했습니다.');
+      })
+      .finally(() => {
+        if (mounted) setMoversLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const maxMarketCap = useMemo(() => {
     if (!rankings.length) return 0;
     return Math.max(...rankings.map((c) => c.market_cap ?? 0));
@@ -67,11 +127,11 @@ export function RankingPage({ onViewProfile }: RankingPageProps) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Award className="size-8 text-blue-400" />
-            <h1 className="text-3xl text-slate-100">글로벌 TOP 20 기업</h1>
-          </div>
-          <p className="text-slate-400">시가총액 기준 순위</p>
+            <div className="flex items-center gap-3 mb-2">
+              <Award className="size-8 text-blue-400" />
+              <h1 className="text-3xl text-slate-100">글로벌 TOP 20 기업</h1>
+            </div>
+            <p className="text-slate-400">시가총액 기준 순위</p>
         </div>
 
         {/* Year Filter - Horizontal Scrollable Button Group */}
@@ -141,10 +201,8 @@ export function RankingPage({ onViewProfile }: RankingPageProps) {
                               <span className="text-lg">{company.rank}</span>
                             </div>
 
-                            {/* Company Logo Placeholder */}
-                            <div className="size-12 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 text-slate-200 ring-2 ring-slate-700 group-hover:ring-blue-500 transition-all">
-                              <span className="text-sm font-semibold">{company.ticker}</span>
-                            </div>
+                            {/* Company Logo */}
+                            <CompanyLogo logoUrl={company.logo_url} ticker={company.ticker} name={company.name} />
 
                             {/* Company Info */}
                             <div className="flex-1 min-w-0">
@@ -173,17 +231,87 @@ export function RankingPage({ onViewProfile }: RankingPageProps) {
             </div>
           </div>
 
-          {/* Movers Panel (placeholder / could be enhanced with API later) */}
-          <div className="lg:col-span-1">
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl sticky top-24">
+          {/* Movers Panel */}
+          <div className="lg:col-span-1 self-start">
+            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl sticky top-20">
               <h2 className="text-lg text-slate-200 mb-6">신규 진입 & 이탈</h2>
-              <div className="text-slate-500 text-sm">추후 데이터 연동 예정</div>
-              <div className="mt-4 flex items-center gap-2 text-slate-400">
-                <TrendingUp className="size-5" /> <span>상위 변동 추적 준비중</span>
-              </div>
-              <div className="mt-2 flex items-center gap-2 text-slate-400">
-                <TrendingDown className="size-5" /> <span>이탈 기업 데이터 준비중</span>
-              </div>
+              {moversLoading ? (
+                <div className="text-slate-500 text-sm">불러오는 중...</div>
+              ) : moversError ? (
+                <div className="text-red-400 text-sm">{moversError}</div>
+              ) : movers && (filteredNewEntries.length > 0 || filteredExited.length > 0) ? (
+                <div className="space-y-6">
+                  <div>
+                    <div className="flex items-center gap-2 text-green-300 mb-2">
+                      <TrendingUp className="size-5" />
+                      <span className="font-semibold">신규 진입</span>
+                    </div>
+                    {filteredNewEntries.length === 0 ? (
+                      <div className="text-slate-500 text-sm">Top 20 신규 진입 없음</div>
+                    ) : (
+                      <ul className="space-y-3">
+                        {filteredNewEntries.map((item) => (
+                          <li key={item.ticker} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="size-10 rounded-full bg-white flex items-center justify-center overflow-hidden ring-2 ring-slate-700">
+                                {item.logo_url ? (
+                                  <img src={item.logo_url} alt={item.name} className="size-10 object-contain" />
+                                ) : (
+                                  <span className="text-xs font-semibold text-slate-700">{item.ticker}</span>
+                                )}
+                              </div>
+                              <div>
+                                <div className="text-slate-100 text-sm font-semibold">{item.name}</div>
+                                <div className="text-xs text-slate-500">{item.ticker}</div>
+                              </div>
+                            </div>
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded">
+                              <ArrowUpRight className="size-4" />
+                              {item.rank ? `#${item.rank}` : 'Top 100'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2 text-amber-300 mb-2">
+                      <TrendingDown className="size-5" />
+                      <span className="font-semibold">이탈</span>
+                    </div>
+                    {filteredExited.length === 0 ? (
+                      <div className="text-slate-500 text-sm">Top 20 이탈 없음</div>
+                    ) : (
+                      <ul className="space-y-3">
+                        {filteredExited.map((item) => (
+                          <li key={item.ticker} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="size-10 rounded-full bg-white flex items-center justify-center overflow-hidden ring-2 ring-slate-700">
+                                {item.logo_url ? (
+                                  <img src={item.logo_url} alt={item.name} className="size-10 object-contain" />
+                                ) : (
+                                  <span className="text-xs font-semibold text-slate-700">{item.ticker}</span>
+                                )}
+                              </div>
+                              <div>
+                                <div className="text-slate-100 text-sm font-semibold">{item.name}</div>
+                                <div className="text-xs text-slate-500">{item.ticker}</div>
+                              </div>
+                            </div>
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-500/20 text-amber-300 text-xs rounded">
+                              <ArrowDownRight className="size-4" />
+                              이탈
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-slate-500 text-sm">표시할 데이터가 없습니다.</div>
+              )}
             </div>
           </div>
         </div>

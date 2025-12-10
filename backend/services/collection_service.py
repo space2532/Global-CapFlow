@@ -10,13 +10,12 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 from requests_cache import CachedSession
 from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import settings
-from app.services import news_service, stock_service
-from app.services.ai_service import ai_client
+from services import news_service, stock_service
+from services.ai_service import ai_client
 
 # 환율 캐시 (통화 → USD 환산율)
 EXCHANGE_RATE_CACHE: Dict[str, float] = {}
@@ -34,23 +33,6 @@ COUNTRY_SUFFIX_MAP = {
     "Taiwan": ".TW",
     "South Korea": ".KS",
     "India": ".NS",
-}
-
-# 수집에서 제외할 티커 (대문자 기준)
-EXCLUDED_TICKERS: Set[str] = {
-    "GOOG",
-}
-
-# 수집에 강제로 포함할 티커 → {ticker: country}
-# 위키 파싱 결과에 없더라도 이 목록은 무조건 추가합니다.
-INCLUDED_TICKERS: Dict[str, str] = {
-    "7203.T": "Japan",
-    "8306.T": "Japan",
-    "ASML": "Netherlands",
-    "AZN": "United Kingdom",
-    "PDD": "China",
-    "600519.SS": "China",
-    "300750.SZ": "China"
 }
 
 
@@ -97,7 +79,7 @@ async def get_usd_exchange_rate(currency: Optional[str]) -> float:
         return 1.0
 
     currency = currency.upper()
-    if currency in ("USD", "Netherlands"):
+    if currency == "USD":
         return 1.0
 
     if currency in EXCHANGE_RATE_CACHE:
@@ -891,6 +873,12 @@ async def fetch_index_tickers() -> Dict[str, str]:
                         # 첫 번째 레벨만 사용
                         table.columns = table.columns.get_level_values(0)
 
+                    # 국가 정보를 담고 있을 수 있는 컬럼 후보
+                    country_columns = [
+                        col for col in table.columns
+                        if any(key in str(col).lower() for key in ["country", "headquarters", "headquarter", "location"])
+                    ]
+                    
                     def _process_row(row, ticker_value, row_country_override=None):
                         nonlocal tickers_from_this_source
                         if pd.isna(ticker_value):
@@ -900,11 +888,20 @@ async def fetch_index_tickers() -> Dict[str, str]:
                         ticker_str = ticker_str.replace("(", "").replace(")", "")
                         if not ticker_str:
                             return
-                        if ticker_str in EXCLUDED_TICKERS:
-                            return
 
-                        # 국가는 WIKI_INDEX_SOURCES에 정의된 기본값을 강제 사용
-                        row_country = country
+                        # 행 단위 국가 정보 우선 사용, 없으면 기본 country
+                        row_country = row_country_override or country
+                        if country_columns:
+                            for ccol in country_columns:
+                                try:
+                                    cval = row.get(ccol)
+                                except Exception:
+                                    cval = None
+                                if cval is not None and not pd.isna(cval):
+                                    cval_str = str(cval).strip()
+                                    if cval_str:
+                                        row_country = cval_str
+                                        break
 
                         normalized_ticker = _apply_country_suffix(ticker_str, row_country)
                         if normalized_ticker:
@@ -981,14 +978,6 @@ async def fetch_index_tickers() -> Dict[str, str]:
         
         # 중복 제거 및 정렬
         unique_tickers_map = dict(sorted(all_tickers_map.items()))
-        
-        # 강제 포함 티커 적용 (위키에서 못 찾은 경우에도 추가)
-        if INCLUDED_TICKERS:
-            for tkr, ctry in INCLUDED_TICKERS.items():
-                ut = tkr.upper()
-                if ut in EXCLUDED_TICKERS:
-                    continue
-                unique_tickers_map[ut] = ctry
         
         return unique_tickers_map, {
             "success_count": success_count,
@@ -1384,30 +1373,20 @@ async def update_rankings_db(
             )
             db.add(company)
 
-    # 2) Rankings: (year, ticker) 기준 upsert
-    ranking_rows = [
-        {
-            "year": current_year,
-            "ranking_date": None,  # 호환용: 기존 연 단위 데이터
-            "rank": rank,
-            "ticker": item["ticker"],
-            "market_cap": item.get("market_cap_usd"),
-            "company_name": item.get("name") or item["ticker"],
-        }
-        for rank, item in enumerate(top_100_list, start=1)
-    ]
-
-    ranking_stmt = pg_insert(models.Ranking).values(ranking_rows)
-    ranking_upsert = ranking_stmt.on_conflict_do_update(
-        index_elements=["year", "ticker"],
-        set_={
-            "rank": ranking_stmt.excluded.rank,
-            "market_cap": ranking_stmt.excluded.market_cap,
-            "company_name": ranking_stmt.excluded.company_name,
-            "ranking_date": ranking_stmt.excluded.ranking_date,
-        },
+    # 2) Rankings: 해당 연도 데이터 전체 삭제 후, 1~100위 재삽입
+    await db.execute(
+        delete(models.Ranking).where(models.Ranking.year == current_year)
     )
-    await db.execute(ranking_upsert)
+
+    for rank, item in enumerate(top_100_list, start=1):
+        ranking = models.Ranking(
+            year=current_year,
+            rank=rank,
+            ticker=item["ticker"],
+            market_cap=item.get("market_cap_usd"),
+            company_name=item.get("name") or item["ticker"],
+        )
+        db.add(ranking)
 
     # 3) Prices: (ticker, date) 기준 upsert
     for item in top_100_list:
@@ -1570,41 +1549,20 @@ async def collect_and_update_global_top_100(db: AsyncSession, limit: int = None)
                 )
                 db.add(new_c)
         
-        # [4-3] Rankings Update (Upsert on year, ticker)
+        # [4-3] Rankings Update (Delete & Insert)
         logger.info(f"💾 [Step 4-3] Rankings 업데이트 (Date: {ranking_date})")
-        # 기존 동일 날짜/연도 데이터 정리 후 업서트 실행
-        await db.execute(
-            delete(models.Ranking).where(models.Ranking.ranking_date == ranking_date)
-        )
-        await db.execute(
-            delete(models.Ranking)
-            .where(models.Ranking.ranking_date.is_(None))
-            .where(models.Ranking.year == current_year)
-        )
-
-        ranking_rows = [
-            {
-                "year": current_year,
-                "ranking_date": ranking_date,
-                "rank": rank,
-                "ticker": item["ticker"],
-                "market_cap": item.get("market_cap_usd"),
-                "company_name": item.get("name") or item["ticker"],
-            }
-            for rank, item in enumerate(top_100, start=1)
-        ]
-
-        ranking_stmt = pg_insert(models.Ranking).values(ranking_rows)
-        ranking_upsert = ranking_stmt.on_conflict_do_update(
-            index_elements=["year", "ticker"],
-            set_={
-                "rank": ranking_stmt.excluded.rank,
-                "market_cap": ranking_stmt.excluded.market_cap,
-                "company_name": ranking_stmt.excluded.company_name,
-                "ranking_date": ranking_stmt.excluded.ranking_date,
-            },
-        )
-        await db.execute(ranking_upsert)
+        await db.execute(delete(models.Ranking).where(models.Ranking.ranking_date == ranking_date))
+        
+        for rank, item in enumerate(top_100, start=1):
+            ranking = models.Ranking(
+                year=current_year,
+                ranking_date=ranking_date,
+                rank=rank,
+                ticker=item["ticker"],
+                market_cap=item.get("market_cap_usd"),
+                company_name=item.get("name") or item["ticker"],
+            )
+            db.add(ranking)
 
         # [4-4] Prices Update (Upsert)
         logger.info(f"💾 [Step 4-4] Prices 업데이트 (Date: {ranking_date})")
@@ -1729,15 +1687,14 @@ async def _process_single_ticker_news(
                 # AI 분석 실패해도 뉴스는 저장
                 pass
         
-        # raw_data 구성 (뉴스가 있는 경우만) - market_reports 테이블에 저장
+        # raw_data 구성 (뉴스가 있는 경우만)
         raw_data_parts = []
         for news in news_list:
             title = news.get("title", "")
             url = news.get("url", "")
             source = news.get("source", "")
             news_date = news.get("date", "")
-            body = news.get("body", "") or news.get("snippet", "")
-            raw_data_parts.append(f"Title: {title}\nSource: {source} ({news_date})\nBody: {body}\nLink: {url}")
+            raw_data_parts.append(f"Title: {title}\nSource: {source} ({news_date})\nLink: {url}")
         raw_data = "\n\n---\n\n".join(raw_data_parts)
         
         return (ticker, {

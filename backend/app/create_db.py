@@ -27,8 +27,11 @@ def get_async_engine() -> AsyncEngine:
         connect_args={
             "server_settings": {
                 "application_name": "global_capflow_create_db",
+                # Allow long-running DDL; set to "0" for no limit or provide ms.
+                "statement_timeout": "0",
             },
-            "command_timeout": 30,
+            # Increase asyncpg command timeout (seconds) to tolerate long DDL.
+            "command_timeout": 180,
             "statement_cache_size": 0,  # Disable prepared statement cache for pgbouncer compatibility
         },
     )

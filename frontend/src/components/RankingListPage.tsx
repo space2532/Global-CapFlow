@@ -1,18 +1,44 @@
+import React from 'react';
 import { useState, useMemo, useEffect } from 'react';
 import { Header } from './Header';
-import { Search, Filter, TrendingUp, TrendingDown, Minus, Award, ChevronDown } from 'lucide-react';
+import { Search, Filter, TrendingUp, TrendingDown, Minus, Award, ChevronDown, Loader2 } from 'lucide-react';
+import { getRankings } from '../services/api';
+import { RankingRead } from '../types';
+
+// Company Logo Component with fallback
+function CompanyLogo({ logoUrl, ticker, name, size = 'md' }: { logoUrl: string | null; ticker: string; name: string; size?: 'sm' | 'md' }) {
+  const containerSize = size === 'sm' ? 'size-8' : 'size-10';
+  const imageSize = size === 'sm' ? 'size-6' : 'size-8';
+  const textSize = size === 'sm' ? 'text-xs' : 'text-sm';
+
+  return (
+    <div className={`${containerSize} rounded-full bg-white flex items-center justify-center flex-shrink-0 overflow-hidden`}>
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={name}
+          className={`${imageSize} object-contain`}
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
+        />
+      ) : (
+        <span className={`${textSize} font-semibold text-slate-700`}>{ticker}</span>
+      )}
+    </div>
+  );
+}
 
 interface RankingCompany {
   rank: number;
   name: string;
   ticker: string;
-  logoUrl: string;
+  logoUrl: string | null;
   marketCap: string;
   marketCapValue: number;
   sector: string;
   industry: string;
   country: string;
-  countryCode: string;
   rankChange: number; // positive = up, negative = down, 0 = no change
   isNewEntry: boolean;
 }
@@ -22,181 +48,19 @@ interface RankingListPageProps {
   sector?: string;
 }
 
-// Mock data for Top 100 companies
-const generateCompanies = (): RankingCompany[] => {
-  const sectors = ['기술', '금융', '헬스케어', '에너지', '소비재', '산업재', '통신', '부동산', '유틸리티', '소재', '반도체'];
-  const countries = [
-    { name: '미국', code: 'US', flag: '🇺🇸' },
-    { name: '중국', code: 'CN', flag: '🇨🇳' },
-    { name: '한국', code: 'KR', flag: '🇰🇷' },
-    { name: '일본', code: 'JP', flag: '🇯🇵' },
-    { name: '영국', code: 'GB', flag: '🇬🇧' },
-    { name: '프랑스', code: 'FR', flag: '🇫🇷' },
-    { name: '독일', code: 'DE', flag: '🇩🇪' },
-    { name: '사우디', code: 'SA', flag: '🇸🇦' },
-    { name: '네덜란드', code: 'NL', flag: '🇳🇱' },
-    { name: '스위스', code: 'CH', flag: '🇨🇭' },
-  ];
+function formatMarketCap(value: number | null): string {
+  if (!value) return 'N/A';
+  const trillion = 1_000_000_000_000;
+  const billion = 1_000_000_000;
 
-  const companyNames = [
-    { name: 'Apple Inc.', ticker: 'AAPL', url: 'apple.com', industry: '소비자 전자제품', country: countries[0] },
-    { name: 'Microsoft Corp.', ticker: 'MSFT', url: 'microsoft.com', industry: '소프트웨어', country: countries[0] },
-    { name: 'Saudi Aramco', ticker: 'ARAMCO', url: 'aramco.com', industry: '석유 & 가스', country: countries[7] },
-    { name: 'Alphabet Inc.', ticker: 'GOOGL', url: 'google.com', industry: '인터넷 서비스', country: countries[0] },
-    { name: 'Amazon.com', ticker: 'AMZN', url: 'amazon.com', industry: '전자상거래', country: countries[0] },
-    { name: 'NVIDIA Corp.', ticker: 'NVDA', url: 'nvidia.com', industry: 'GPU 제조', country: countries[0] },
-    { name: 'Tesla Inc.', ticker: 'TSLA', url: 'tesla.com', industry: '전기차', country: countries[0] },
-    { name: 'Meta Platforms', ticker: 'META', url: 'meta.com', industry: '소셜 미디어', country: countries[0] },
-    { name: 'Berkshire Hathaway', ticker: 'BRK.B', url: 'berkshirehathaway.com', industry: '투자 회사', country: countries[0] },
-    { name: 'TSMC', ticker: 'TSM', url: 'tsmc.com', industry: '반도체 제조', country: countries[1] },
-    { name: 'Visa Inc.', ticker: 'V', url: 'visa.com', industry: '결제 서비스', country: countries[0] },
-    { name: 'JPMorgan Chase', ticker: 'JPM', url: 'jpmorganchase.com', industry: '은행', country: countries[0] },
-    { name: 'Samsung Electronics', ticker: '005930.KS', url: 'samsung.com', industry: '전자제품', country: countries[2] },
-    { name: 'Johnson & Johnson', ticker: 'JNJ', url: 'jnj.com', industry: '제약 & 헬스케어', country: countries[0] },
-    { name: 'UnitedHealth Group', ticker: 'UNH', url: 'unitedhealthgroup.com', industry: '건강보험', country: countries[0] },
-    { name: 'Walmart Inc.', ticker: 'WMT', url: 'walmart.com', industry: '소매', country: countries[0] },
-    { name: 'Mastercard Inc.', ticker: 'MA', url: 'mastercard.com', industry: '결제 서비스', country: countries[0] },
-    { name: 'Exxon Mobil', ticker: 'XOM', url: 'exxonmobil.com', industry: '석유 & 가스', country: countries[0] },
-    { name: 'Procter & Gamble', ticker: 'PG', url: 'pg.com', industry: '소비재', country: countries[0] },
-    { name: 'LVMH', ticker: 'MC.PA', url: 'lvmh.com', industry: '명품', country: countries[5] },
-    { name: 'Eli Lilly', ticker: 'LLY', url: 'lilly.com', industry: '제약', country: countries[0] },
-    { name: 'Novo Nordisk', ticker: 'NVO', url: 'novonordisk.com', industry: '제약', country: countries[0] },
-    { name: 'ASML Holding', ticker: 'ASML', url: 'asml.com', industry: '반도체 장비', country: countries[8] },
-    { name: 'Tencent Holdings', ticker: 'TCEHY', url: 'tencent.com', industry: '인터넷 서비스', country: countries[1] },
-    { name: 'Toyota Motor', ticker: 'TM', url: 'toyota.com', industry: '자동차', country: countries[3] },
-    { name: 'Nestlé', ticker: 'NSRGY', url: 'nestle.com', industry: '식품 & 음료', country: countries[9] },
-    { name: 'Home Depot', ticker: 'HD', url: 'homedepot.com', industry: '가정용품 소매', country: countries[0] },
-    { name: 'Chevron Corp.', ticker: 'CVX', url: 'chevron.com', industry: '석유 & 가스', country: countries[0] },
-    { name: 'AbbVie Inc.', ticker: 'ABBV', url: 'abbvie.com', industry: '제약', country: countries[0] },
-    { name: 'Broadcom Inc.', ticker: 'AVGO', url: 'broadcom.com', industry: '반도체', country: countries[0] },
-    { name: 'Oracle Corp.', ticker: 'ORCL', url: 'oracle.com', industry: '소프트웨어', country: countries[0] },
-    { name: 'Coca-Cola', ticker: 'KO', url: 'coca-cola.com', industry: '음료', country: countries[0] },
-    { name: 'Bank of America', ticker: 'BAC', url: 'bankofamerica.com', industry: '은행', country: countries[0] },
-    { name: 'PepsiCo', ticker: 'PEP', url: 'pepsico.com', industry: '식품 & 음료', country: countries[0] },
-    { name: 'Shell', ticker: 'SHEL', url: 'shell.com', industry: '석유 & 가스', country: countries[4] },
-    { name: 'Adobe Inc.', ticker: 'ADBE', url: 'adobe.com', industry: '소프트웨어', country: countries[0] },
-    { name: 'Salesforce', ticker: 'CRM', url: 'salesforce.com', industry: '클라우드 소프트웨어', country: countries[0] },
-    { name: 'Merck & Co.', ticker: 'MRK', url: 'merck.com', industry: '제약', country: countries[0] },
-    { name: 'Costco Wholesale', ticker: 'COST', url: 'costco.com', industry: '도매 소매', country: countries[0] },
-    { name: 'Netflix Inc.', ticker: 'NFLX', url: 'netflix.com', industry: '스트리밍', country: countries[0] },
-    { name: 'Accenture', ticker: 'ACN', url: 'accenture.com', industry: 'IT 컨설팅', country: countries[0] },
-    { name: 'McDonald\'s', ticker: 'MCD', url: 'mcdonalds.com', industry: '외식', country: countries[0] },
-    { name: 'Cisco Systems', ticker: 'CSCO', url: 'cisco.com', industry: '네트워크 장비', country: countries[0] },
-    { name: 'Pfizer Inc.', ticker: 'PFE', url: 'pfizer.com', industry: '제약', country: countries[0] },
-    { name: 'AMD', ticker: 'AMD', url: 'amd.com', industry: '반도체', country: countries[0] },
-    { name: 'Nike Inc.', ticker: 'NKE', url: 'nike.com', industry: '스포츠 용품', country: countries[0] },
-    { name: 'Thermo Fisher', ticker: 'TMO', url: 'thermofisher.com', industry: '과학 기기', country: countries[0] },
-    { name: 'Danaher Corp.', ticker: 'DHR', url: 'danaher.com', industry: '과학 기기', country: countries[0] },
-    { name: 'Abbott Labs', ticker: 'ABT', url: 'abbott.com', industry: '의료 기기', country: countries[0] },
-    { name: 'Comcast Corp.', ticker: 'CMCSA', url: 'comcast.com', industry: '통신', country: countries[0] },
-    { name: 'Verizon', ticker: 'VZ', url: 'verizon.com', industry: '통신', country: countries[0] },
-    { name: 'AT&T Inc.', ticker: 'T', url: 'att.com', industry: '통신', country: countries[0] },
-    { name: 'Intel Corp.', ticker: 'INTC', url: 'intel.com', industry: '반도체', country: countries[0] },
-    { name: 'Qualcomm', ticker: 'QCOM', url: 'qualcomm.com', industry: '반도체', country: countries[0] },
-    { name: 'Texas Instruments', ticker: 'TXN', url: 'ti.com', industry: '반도체', country: countries[0] },
-    { name: 'Union Pacific', ticker: 'UNP', url: 'up.com', industry: '철도', country: countries[0] },
-    { name: 'Honeywell', ticker: 'HON', url: 'honeywell.com', industry: '산업 복합기업', country: countries[0] },
-    { name: 'Boeing Co.', ticker: 'BA', url: 'boeing.com', industry: '항공우주', country: countries[0] },
-    { name: 'Caterpillar', ticker: 'CAT', url: 'caterpillar.com', industry: '건설 장비', country: countries[0] },
-    { name: 'General Electric', ticker: 'GE', url: 'ge.com', industry: '산업 복합기업', country: countries[0] },
-    { name: '3M Company', ticker: 'MMM', url: '3m.com', industry: '산업재', country: countries[0] },
-    { name: 'Lockheed Martin', ticker: 'LMT', url: 'lockheedmartin.com', industry: '항공우주 & 방위', country: countries[0] },
-    { name: 'American Express', ticker: 'AXP', url: 'americanexpress.com', industry: '금융 서비스', country: countries[0] },
-    { name: 'Goldman Sachs', ticker: 'GS', url: 'goldmansachs.com', industry: '투자 은행', country: countries[0] },
-    { name: 'Morgan Stanley', ticker: 'MS', url: 'morganstanley.com', industry: '투자 은행', country: countries[0] },
-    { name: 'BlackRock', ticker: 'BLK', url: 'blackrock.com', industry: '자산 운용', country: countries[0] },
-    { name: 'Charles Schwab', ticker: 'SCHW', url: 'schwab.com', industry: '증권', country: countries[0] },
-    { name: 'Starbucks', ticker: 'SBUX', url: 'starbucks.com', industry: '외식', country: countries[0] },
-    { name: 'Linde plc', ticker: 'LIN', url: 'linde.com', industry: '산업 가스', country: countries[4] },
-    { name: 'Bristol Myers', ticker: 'BMY', url: 'bms.com', industry: '제약', country: countries[0] },
-    { name: 'CVS Health', ticker: 'CVS', url: 'cvshealth.com', industry: '헬스케어 소매', country: countries[0] },
-    { name: 'Siemens AG', ticker: 'SIEGY', url: 'siemens.com', industry: '산업 복합기업', country: countries[6] },
-    { name: 'SAP SE', ticker: 'SAP', url: 'sap.com', industry: '소프트웨어', country: countries[6] },
-    { name: 'Alibaba Group', ticker: 'BABA', url: 'alibaba.com', industry: '전자상거래', country: countries[1] },
-    { name: 'Hermès', ticker: 'RMS.PA', url: 'hermes.com', industry: '명품', country: countries[5] },
-    { name: 'L\'Oréal', ticker: 'OR.PA', url: 'loreal.com', industry: '화장품', country: countries[5] },
-    { name: 'HSBC Holdings', ticker: 'HSBC', url: 'hsbc.com', industry: '은행', country: countries[4] },
-    { name: 'AstraZeneca', ticker: 'AZN', url: 'astrazeneca.com', industry: '제약', country: countries[4] },
-    { name: 'Unilever', ticker: 'UL', url: 'unilever.com', industry: '소비재', country: countries[4] },
-    { name: 'Roche Holding', ticker: 'RHHBY', url: 'roche.com', industry: '제약', country: countries[9] },
-    { name: 'Novartis AG', ticker: 'NVS', url: 'novartis.com', industry: '제약', country: countries[9] },
-    { name: 'Sony Group', ticker: 'SONY', url: 'sony.com', industry: '전자제품', country: countries[3] },
-    { name: 'SoftBank Group', ticker: '9984.T', url: 'softbank.jp', industry: '통신 & 투자', country: countries[3] },
-    { name: 'BYD Company', ticker: 'BYDDY', url: 'byd.com', industry: '전기차', country: countries[1] },
-    { name: 'Meituan', ticker: 'MPNGY', url: 'meituan.com', industry: '배달 & 서비스', country: countries[1] },
-    { name: 'Pinduoduo', ticker: 'PDD', url: 'pinduoduo.com', industry: '전자상거래', country: countries[1] },
-    { name: 'ICBC', ticker: 'IDCBY', url: 'icbc.com.cn', industry: '은행', country: countries[1] },
-    { name: 'China Construction', ticker: 'CICHY', url: 'ccb.com', industry: '은행', country: countries[1] },
-    { name: 'Hyundai Motor', ticker: '005380.KS', url: 'hyundai.com', industry: '자동차', country: countries[2] },
-    { name: 'SK Hynix', ticker: '000660.KS', url: 'skhynix.com', industry: '반도체', country: countries[2] },
-    { name: 'LG Energy', ticker: '373220.KS', url: 'lgensol.com', industry: '배터리', country: countries[2] },
-    { name: 'POSCO Holdings', ticker: '005490.KS', url: 'posco.com', industry: '철강', country: countries[2] },
-    { name: 'Naver Corp.', ticker: '035420.KS', url: 'naver.com', industry: '인터넷 서비스', country: countries[2] },
-    { name: 'Kakao Corp.', ticker: '035720.KS', url: 'kakao.com', industry: '인터넷 서비스', country: countries[2] },
-    { name: 'Rio Tinto', ticker: 'RIO', url: 'riotinto.com', industry: '광업', country: countries[4] },
-    { name: 'BHP Group', ticker: 'BHP', url: 'bhp.com', industry: '광업', country: countries[0] },
-    { name: 'Airbus SE', ticker: 'EADSY', url: 'airbus.com', industry: '항공우주', country: countries[5] },
-    { name: 'Ferrari N.V.', ticker: 'RACE', url: 'ferrari.com', industry: '자동차', country: countries[0] },
-    { name: 'IBM Corp.', ticker: 'IBM', url: 'ibm.com', industry: '소프트웨어 & IT 서비스', country: countries[0] },
-    { name: 'Uber Technologies', ticker: 'UBER', url: 'uber.com', industry: '차량 공유 & 배달', country: countries[0] },
-  ];
-
-  return companyNames.map((company, index) => {
-    const rank = index + 1;
-    let marketCapValue = 3200 - (rank * 28) - Math.random() * 20;
-    if (marketCapValue < 50) marketCapValue = 50 + Math.random() * 100;
-    
-    const formatMarketCap = (value: number): string => {
-      if (value >= 1000) return `$${(value / 1000).toFixed(1)}T`;
-      return `$${value.toFixed(0)}B`;
-    };
-
-    // Determine sector based on industry
-    let sector = '기술';
-    if (company.industry.includes('제약') || company.industry.includes('헬스케어') || company.industry.includes('의료')) {
-      sector = '헬스케어';
-    } else if (company.industry.includes('은행') || company.industry.includes('금융') || company.industry.includes('투자') || company.industry.includes('증권')) {
-      sector = '금융';
-    } else if (company.industry.includes('석유') || company.industry.includes('가스') || company.industry.includes('에너지')) {
-      sector = '에너지';
-    } else if (company.industry.includes('소매') || company.industry.includes('소비재') || company.industry.includes('식품') || company.industry.includes('음료') || company.industry.includes('명품') || company.industry.includes('외식')) {
-      sector = '소비재';
-    } else if (company.industry.includes('통신')) {
-      sector = '통신';
-    } else if (company.industry.includes('반도체')) {
-      sector = '반도체';
-    } else if (company.industry.includes('산업') || company.industry.includes('건설') || company.industry.includes('항공') || company.industry.includes('철도') || company.industry.includes('광업') || company.industry.includes('철강')) {
-      sector = '산업재';
-    }
-
-    // Generate rank change: -10 to +10, with bias towards 0
-    let rankChange = Math.floor(Math.random() * 21) - 10;
-    if (Math.abs(rankChange) <= 2 && Math.random() > 0.3) {
-      rankChange = 0;
-    }
-
-    // Mark new entries (5% chance)
-    const isNewEntry = Math.random() < 0.05;
-
-    return {
-      rank,
-      name: company.name,
-      ticker: company.ticker,
-      logoUrl: `https://logo.clearbit.com/${company.url}`,
-      marketCap: formatMarketCap(marketCapValue),
-      marketCapValue,
-      sector,
-      industry: company.industry,
-      country: company.country.name,
-      countryCode: company.country.flag,
-      rankChange: isNewEntry ? 999 : rankChange, // 999 for new entries
-      isNewEntry,
-    };
-  });
-};
-
-const allCompanies = generateCompanies();
-const allSectors = ['전체', ...Array.from(new Set(allCompanies.map(c => c.sector))).sort()];
+  if (value >= trillion) {
+    return `$${(value / trillion).toFixed(1)}T`;
+  }
+  if (value >= billion) {
+    return `$${(value / billion).toFixed(1)}B`;
+  }
+  return `$${value.toLocaleString()}`;
+}
 
 function getRankChangeIcon(change: number) {
   if (change === 999) return { icon: Award, color: 'text-green-400', label: 'NEW' };
@@ -208,6 +72,9 @@ function getRankChangeIcon(change: number) {
 export function RankingListPage({ onViewProfile, sector }: RankingListPageProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSector, setSelectedSector] = useState<string>(sector || '전체');
+  const [companies, setCompanies] = useState<RankingCompany[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Normalize sector name (map "기술/IT" to "기술", etc.)
   const normalizeSector = (sectorName: string): string => {
@@ -215,8 +82,63 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
     return sectorName;
   };
 
+  // Load rankings data from API
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    setError(null);
+
+    // Try 2025 first, fallback to 2024 if not available
+    const loadRankings = async (year: number) => {
+      try {
+        const data: RankingRead[] = await getRankings(year, 100);
+        if (!mounted) return;
+
+        // Map API data to RankingCompany interface
+        const mappedCompanies: RankingCompany[] = data.map((company) => ({
+          rank: company.rank,
+          name: company.name,
+          ticker: company.ticker,
+          logoUrl: company.logo_url || '',
+          marketCap: formatMarketCap(company.market_cap),
+          marketCapValue: company.market_cap || 0,
+          sector: company.sector || '기타',
+          industry: company.industry || 'N/A',
+          country: company.country || 'N/A',
+          rankChange: 0, // 임시
+          isNewEntry: false, // 임시
+        }));
+
+        setCompanies(mappedCompanies);
+        setLoading(false);
+      } catch (err: any) {
+        if (!mounted) return;
+        
+        // If 2025 fails, try 2024
+        if (year === 2025) {
+          loadRankings(2024);
+        } else {
+          setError(err.message || 'Failed to load rankings');
+          setLoading(false);
+        }
+      }
+    };
+
+    loadRankings(2025);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Get unique sectors from loaded companies
+  const allSectors = useMemo(() => {
+    const sectors = Array.from(new Set(companies.map(c => c.sector))).sort();
+    return ['전체', ...sectors];
+  }, [companies]);
+
   const filteredCompanies = useMemo(() => {
-    return allCompanies.filter(company => {
+    return companies.filter(company => {
       const matchesSearch = searchQuery === '' ||
         company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         company.ticker.toLowerCase().includes(searchQuery.toLowerCase());
@@ -226,7 +148,7 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
       
       return matchesSearch && matchesSector;
     });
-  }, [searchQuery, selectedSector]);
+  }, [searchQuery, selectedSector, companies]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-24">
@@ -291,8 +213,25 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Loading State */}
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-16">
+            <Loader2 className="size-8 text-blue-500 animate-spin mb-4" />
+            <div className="text-slate-400">데이터를 불러오는 중...</div>
+          </div>
+        )}
+
+        {/* Error State */}
+        {error && !loading && (
+          <div className="py-16 text-center">
+            <div className="text-red-400 mb-2">오류가 발생했습니다</div>
+            <div className="text-slate-400 text-sm">{error}</div>
+          </div>
+        )}
+
         {/* Data Table - Desktop */}
-        <div className="hidden md:block bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl shadow-xl overflow-hidden">
+        {!loading && !error && (
+          <div className="hidden md:block bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl shadow-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -329,16 +268,7 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
                       {/* Company */}
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="size-10 rounded-full bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            <img
-                              src={company.logoUrl}
-                              alt={company.name}
-                              className="size-8 object-contain"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                            />
-                          </div>
+                          <CompanyLogo logoUrl={company.logoUrl} ticker={company.ticker} name={company.name} size="md" />
                           <div className="min-w-0">
                             <div className="text-slate-200 hover:text-blue-400 transition-colors">
                               {company.name}
@@ -372,7 +302,7 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
 
                       {/* Country */}
                       <td className="px-6 py-4 text-center">
-                        <span className="text-2xl" title={company.country}>{company.countryCode}</span>
+                        <span className="text-sm text-slate-400" title={company.country}>{company.country}</span>
                       </td>
 
                       {/* Rank Change */}
@@ -389,9 +319,11 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
             </table>
           </div>
         </div>
+        )}
 
         {/* Mobile Card List */}
-        <div className="md:hidden space-y-3">
+        {!loading && !error && (
+          <div className="md:hidden space-y-3">
           {filteredCompanies.map((company, index) => {
             const rankChange = getRankChangeIcon(company.rankChange);
             const RankIcon = rankChange.icon;
@@ -414,16 +346,7 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
                   {/* Company Logo & Name */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <div className="size-8 rounded-lg bg-white flex items-center justify-center overflow-hidden flex-shrink-0">
-                        <img
-                          src={company.logoUrl}
-                          alt={company.name}
-                          className="size-6 object-contain"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
-                      </div>
+                      <CompanyLogo logoUrl={company.logoUrl} ticker={company.ticker} name={company.name} size="sm" />
                       <div className="min-w-0">
                         <div className="text-slate-200 line-clamp-1">{company.name}</div>
                       </div>
@@ -463,9 +386,8 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
                   {/* Country */}
                   <div>
                     <div className="text-xs text-slate-500 mb-1">국가</div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-xl">{company.countryCode}</span>
-                      <span className="text-sm text-slate-400">{company.country}</span>
+                    <div className="flex items-center gap-1 text-sm text-slate-400">
+                      <span className="font-semibold text-slate-200">{company.country}</span>
                     </div>
                   </div>
                 </div>
@@ -483,9 +405,10 @@ export function RankingListPage({ onViewProfile, sector }: RankingListPageProps)
             );
           })}
         </div>
+        )}
 
         {/* Empty State */}
-        {filteredCompanies.length === 0 && (
+        {!loading && !error && filteredCompanies.length === 0 && (
           <div className="py-16 text-center">
             <div className="text-slate-400 mb-2">검색 결과가 없습니다</div>
             <button

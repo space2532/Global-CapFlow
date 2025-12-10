@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 import datetime
+import re
 
 from .. import models, schemas
 from ..database import get_db
@@ -11,6 +12,79 @@ from app.services import stock_service, news_service
 from app.services.ai_service import ai_client
 
 router = APIRouter()
+
+
+def parse_news_from_raw_data(raw_data: str | None, summary_content: str | None = None) -> list[schemas.NewsItem]:
+    """
+    raw_data 문자열에서 뉴스 아이템을 파싱합니다.
+    형식: "Title: ...\nSource: ... (...)\nBody: ...\nLink: ..." 가 "\n\n---\n\n"로 구분되어 반복됩니다.
+    
+    Args:
+        raw_data: 파싱할 원본 데이터 문자열
+        summary_content: 전체 뉴스에 대한 AI 요약 (각 뉴스의 summary로 사용)
+    """
+    if not raw_data or raw_data == "No news collected":
+        return []
+    
+    # 1차 파싱: 원문에서 기사 정보를 추출
+    parsed_sources: list[schemas.NewsSource] = []
+    news_blocks = raw_data.split("\n\n---\n\n")
+    
+    for block in news_blocks:
+        block = block.strip()
+        if not block:
+            continue
+        
+        title_match = re.search(r"Title:\s*(.+?)(?:\n|$)", block, re.MULTILINE)
+        source_match = re.search(r"Source:\s*(.+?)\s*\((.+?)\)", block, re.MULTILINE)
+        link_match = re.search(r"Link:\s*(.+?)(?:\n|$)", block, re.MULTILINE)
+        
+        title = title_match.group(1).strip() if title_match else ""
+        source = source_match.group(1).strip() if source_match else ""
+        date = source_match.group(2).strip() if source_match else ""
+        url = link_match.group(1).strip() if link_match else ""
+        
+        if title or source or url:
+            parsed_sources.append(schemas.NewsSource(
+                title=title,
+                source=source,
+                date=date,
+                url=url,
+            ))
+    
+    if not parsed_sources:
+        return []
+    
+    # summary_content가 있으면 동일 내용으로 간주하고 하나로 묶음
+    if summary_content and summary_content.strip():
+        return [
+            schemas.NewsItem(
+                title="AI 요약",
+                source="AI 분석",
+                date="",
+                url="",
+                summary=summary_content.strip(),
+                sources=parsed_sources,
+            )
+        ]
+    
+    # summary가 없으면 제목/날짜 조합으로 중복 제거하며 묶기
+    grouped_items: dict[tuple[str, str], schemas.NewsItem] = {}
+    for src in parsed_sources:
+        key = (src.title.lower(), src.date)
+        if key not in grouped_items:
+            grouped_items[key] = schemas.NewsItem(
+                title=src.title,
+                source=src.source,
+                date=src.date,
+                url=src.url,
+                summary=None,
+                sources=[src],
+            )
+        else:
+            grouped_items[key].sources.append(src)
+    
+    return list(grouped_items.values())
 
 @router.post("/companies/{ticker}/fetch", response_model=schemas.CompanyDetail, summary="Fetch & Save Stock + News Data")
 async def fetch_company_data(
@@ -101,14 +175,15 @@ async def fetch_company_data(
 
     # 3-3. MarketReport (통합 리포트) 저장 - 종목당 1개
     if news_list or ai_result.get("summary") != "분석 실패":
-        # raw_data: 수집된 뉴스 기사들의 제목/링크를 합친 원문 문자열
+        # raw_data: 수집된 뉴스 기사들의 제목/본문/링크를 합친 원문 문자열
         raw_data_parts = []
         for news in news_list:
             title = news.get("title", "")
             url = news.get("url", "")
             source = news.get("source", "")
             news_date = news.get("date", "")
-            raw_data_parts.append(f"Title: {title}\nSource: {source} ({news_date})\nLink: {url}")
+            body = news.get("body", "") or news.get("snippet", "")
+            raw_data_parts.append(f"Title: {title}\nSource: {source} ({news_date})\nBody: {body}\nLink: {url}")
         
         raw_data = "\n\n---\n\n".join(raw_data_parts) if raw_data_parts else "No news collected"
         
@@ -169,6 +244,28 @@ async def fetch_company_data(
             latest_report = report
             break
     
+    # 최신 Quarterly Report 조회 (연도/분기 내림차순 1건)
+    quarterly_stmt = (
+        select(models.QuarterlyReport)
+        .where(models.QuarterlyReport.ticker == ticker)
+        .order_by(models.QuarterlyReport.year.desc(), models.QuarterlyReport.quarter.desc())
+        .limit(1)
+    )
+    quarterly_result = await db.execute(quarterly_stmt)
+    latest_quarterly_report = quarterly_result.scalar_one_or_none()
+    
+    # raw_data에서 뉴스 파싱 (market_reports 테이블의 정보 활용)
+    # summary_content가 없어도 뉴스는 표시 (제목, 출처는 raw_data에서 파싱)
+    recent_news = []
+    if latest_report and latest_report.raw_data:
+        recent_news = parse_news_from_raw_data(
+            latest_report.raw_data, 
+            summary_content=latest_report.summary_content if latest_report.summary_content else None
+        )
+        print(f"📰 [CompanyRouter] Parsed {len(recent_news)} news items for {ticker}, summary_content: {bool(latest_report.summary_content)}")
+    else:
+        print(f"⚠️ [CompanyRouter] No market report or raw_data found for {ticker}")
+    
     # CompanyDetail 객체 구성
     company_detail = schemas.CompanyDetail(
         ticker=company.ticker,
@@ -179,7 +276,9 @@ async def fetch_company_data(
         currency=company.currency,
         logo_url=company.logo_url,
         financials=[schemas.FinancialRead.model_validate(fin) for fin in financials],
-        latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None
+        latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None,
+        latest_quarterly_report=schemas.QuarterlyReportRead.model_validate(latest_quarterly_report) if latest_quarterly_report else None,
+        recent_news=recent_news
     )
     
     return company_detail
@@ -214,6 +313,28 @@ async def get_company_detail(ticker: str, db: AsyncSession = Depends(get_db)):
             latest_report = report
             break
     
+    # 최신 Quarterly Report 조회 (연도/분기 내림차순 1건)
+    quarterly_stmt = (
+        select(models.QuarterlyReport)
+        .where(models.QuarterlyReport.ticker == ticker)
+        .order_by(models.QuarterlyReport.year.desc(), models.QuarterlyReport.quarter.desc())
+        .limit(1)
+    )
+    quarterly_result = await db.execute(quarterly_stmt)
+    latest_quarterly_report = quarterly_result.scalar_one_or_none()
+    
+    # raw_data에서 뉴스 파싱 (market_reports 테이블의 정보 활용)
+    # summary_content가 없어도 뉴스는 표시 (제목, 출처는 raw_data에서 파싱)
+    recent_news = []
+    if latest_report and latest_report.raw_data:
+        recent_news = parse_news_from_raw_data(
+            latest_report.raw_data, 
+            summary_content=latest_report.summary_content if latest_report.summary_content else None
+        )
+        print(f"📰 [CompanyRouter] Parsed {len(recent_news)} news items for {ticker}, summary_content: {bool(latest_report.summary_content)}")
+    else:
+        print(f"⚠️ [CompanyRouter] No market report or raw_data found for {ticker}")
+    
     # CompanyDetail 객체 구성
     company_detail = schemas.CompanyDetail(
         ticker=company.ticker,
@@ -224,7 +345,9 @@ async def get_company_detail(ticker: str, db: AsyncSession = Depends(get_db)):
         currency=company.currency,
         logo_url=company.logo_url,
         financials=[schemas.FinancialRead.model_validate(fin) for fin in financials],
-        latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None
+        latest_report=schemas.MarketReportRead.model_validate(latest_report) if latest_report and latest_report.summary_content else None,
+        latest_quarterly_report=schemas.QuarterlyReportRead.model_validate(latest_quarterly_report) if latest_quarterly_report else None,
+        recent_news=recent_news
     )
     
     return company_detail
