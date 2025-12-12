@@ -80,6 +80,9 @@ python app/create_db.py          # 테이블 생성
 # 필요 시 추가 마이그레이션
 # psql $DATABASE_URL -f migrations/add_new_fields.sql
 
+# DB 데이터 수집 테스트
+python backend/test/test_full_process.py
+
 # 서버 실행
 uvicorn app.main:app --reload --app-dir .
 ```
